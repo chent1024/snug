@@ -6,6 +6,11 @@ import SnugCore
 extension AppController: AppIntents {
     func setPhoneScreen(_ on: Bool) { changeConfig("手机屏 → \(on ? "开" : "关")") { $0.phoneScreen = on } }
 
+    func setScreenSize(_ size: PhoneScreenSize) {
+        guard changeConfig("基础尺寸 → \(size.label)", { $0.screenSize = size }) else { return }
+        displays.nextSize = size
+    }
+
     func setGestures(_ on: Bool) {
         guard changeConfig("手机手势 → \(on ? "开" : "关")", { $0.gestures = on }) else { return }
         syncGestures()
@@ -119,16 +124,17 @@ extension AppController: AppIntents {
 }
 
 extension AppController: PhoneIntents {
-    func pull(_ window: WindowInfo) { desk.pull(window) }
+    func pull(_ window: WindowInfo) { desk.enterWorkspace(); desk.pull(window) }
 
     func open(_ app: AppInfo) {
+        desk.enterWorkspace()
         switch AppList.action(for: app, running: catalog.running) {
         case .pull(let window): desk.pull(window)
         case .open(let app): desk.open(app)
         }
     }
 
-    func newWindow(_ app: RunningApp) { desk.newWindow(app) }
+    func newWindow(_ app: RunningApp) { desk.enterWorkspace(); desk.newWindow(app) }
     func quit(_ app: RunningApp) { desk.quit(app) }
     func forceQuit(pid: Int32, app: String) { desk.forceQuit(pid: pid, app: app) }
     func close(_ window: WindowInfo) { desk.close(window) }

@@ -23,6 +23,15 @@ A mobile workspace built for UU Remote<br>Dedicated portrait screen · Full-scre
 
 > Snug continues [aoyamashou/UUyc-companion](https://github.com/aoyamashou/UUyc-companion) (UU Remote Companion by AoyamaShou, MIT License), with the original author's copyright notices and commit history fully preserved. Since version 2.0, it has been redesigned around the phone screen.
 
+
+## Personal customization branch
+
+This branch follows upstream 2.3.0 main and retains its app library, new-window actions and adaptive width. The official downloads and updater below still distribute the upstream build.
+
+- Two standard 1× base sizes: Redmi 488×1084 and iPhone 13 585×1266; wider adaptive modes retain the selected aspect ratio.
+- Ordinary visible work windows stay in the phone workspace until disconnect, then their original screen, frame and desktop ownership are verified. Physical displays stay on. Automatic collection leaves minimized, fullscreen and other-Space windows alone; explicit library actions keep upstream behavior.
+- The confirmed `com.openai.codex` application uses reversible Command-Plus/Minus increments, preserving the prior font baseline. Its shortcuts were manually confirmed by the user; no agent-operated target-app acceptance has been performed.
+
 ## 📥 Download
 
 <img src="Assets/AppIcon/AppIcon-1024.png" width="88" align="left" alt="Snug icon">
@@ -137,12 +146,12 @@ rm ~/Library/LaunchAgents/com.corndog.uudisplay.watchdog-agent.plist
    <img src="https://dl.zephyrxiang.com/snug/media/uu-screen-picker.212fdbe9.png" width="50%" alt="UU Remote's screen list, showing display 3: Snug Phone Screen">
 
 2. **Pick an app or window**: tap an app or window in the App Library and it fills the screen; apps that aren't running are launched
-3. **Switch windows**: tap the bottom indicator bar to return to the App Library; choosing another window returns the previous one to its place
+3. **Switch windows**: tap the bottom indicator bar to return to the App Library; choosing another window leaves the previous ordinary work window in the phone workspace until disconnect
 4. **End the session**: windows return to their original positions, text sizes are restored, and the phone screen is removed
 
 ## 🔒 Isolation and Restoration
 
-- **Only the phone screen is touched**: the main display, other screens, and other windows are left alone
+- **Physical display settings stay unchanged**: physical displays remain on; only recorded ordinary windows on the current desktop are collected
 - **Record first, then change**: each window's original position and text size are recorded in advance, so they can be restored even if Snug quits unexpectedly
 - **Unresponsive apps are left as they are**: if an app stops responding, Snug does not force its window to move and explains why on screen
 - **No network access**: Snug connects to no servers and collects no data
@@ -152,9 +161,9 @@ rm ~/Library/LaunchAgents/com.corndog.uudisplay.watchdog-agent.plist
 | Limitation | Details |
 | :--- | :--- |
 | Relies on undocumented macOS APIs | May break after a major macOS update |
-| Screen proportions match the iPhone 17 Pro Max | Other models may show slight letterboxing; portrait only |
+| Two portrait base sizes | Redmi and iPhone 13; minimum app sizes may require a wider adaptive mode |
 | Smaller text in some windows | Apps such as System Settings and Safari enforce a minimum width; the phone screen switches to a resolution just wide enough, so the window still fills it and text shrinks accordingly (pinch to zoom) |
-| Text enlargement covers terminals and editors only | Ghostty, Terminal, iTerm2, VS Code, Cursor, and Zed; browsers are not adjusted |
+| Text enlargement covers supported apps | Ghostty, Terminal, iTerm2, VS Code, Cursor, Zed and the confirmed ChatGPT/Codex target; browsers are not adjusted |
 | Not an official NetEase product | Unaffiliated with UU Remote or its developer; UU Remote updates may affect some features |
 | The phone screen may occasionally remain after a session ends | Occurs when the system log misses the end of the stream; the menu bar still shows the session as active (「远程中」). Turn off the phone screen in Settings to restore |
 

@@ -55,7 +55,7 @@ final class PhoneScreenWindows {
         guard let list, let homeBar else { return }
         list.setFrame(screen.frame, display: true)
         homeBar.setFrame(homeBarFrame(on: screen), display: true)
-        homeBarView?.scale = ScreenFit.scale(screenWidth: screen.frame.width)
+        homeBarView?.scale = ScreenFit.scale(screenWidth: screen.frame.width, for: state.phone.profile ?? state.config.screenSize)
 
         let showList = phone.listVisible || phone.placed == nil
         // 手机在看这块屏。不知道 UU 在推哪块屏（推流日志没读到）时当作在看
@@ -101,7 +101,7 @@ final class PhoneScreenWindows {
     private func homeBarFrame(on screen: NSScreen) -> NSRect {
         let visible = screen.visibleFrame
         return NSRect(x: visible.minX, y: visible.minY, width: visible.width,
-                      height: ScreenFit.homeBarHeight(screenWidth: screen.frame.width))
+                      height: ScreenFit.homeBarHeight(screenWidth: screen.frame.width, for: state.phone.profile ?? state.config.screenSize))
     }
 }
 

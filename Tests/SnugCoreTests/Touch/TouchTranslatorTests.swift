@@ -5,10 +5,10 @@ import Testing
 
 private let p0 = CGPoint(x: 100, y: 300)
 /// 基准宽度的手机屏；elsewhere 是别处的手机屏，用来表示「在手机屏外按下」
-private let phone = CGRect(x: 0, y: 0, width: 540, height: 950)
-private let elsewhere = CGRect(x: 2000, y: 0, width: 540, height: 950)
+private let phone = CGRect(x: 0, y: 0, width: 488, height: 1084)
+private let elsewhere = CGRect(x: 2000, y: 0, width: 488, height: 1084)
 /// 最宽一档（1080）的手机屏：阈值都是基准的 2 倍
-private let widest = CGRect(x: 0, y: 0, width: 1080, height: 1900)
+private let widest = CGRect(x: 0, y: 0, width: 976, height: 2168)
 
 private func input(_ kind: TouchInput.Kind, _ x: Double, _ y: Double, _ t: Double) -> TouchInput {
     TouchInput(kind, at: CGPoint(x: x, y: y), time: t)

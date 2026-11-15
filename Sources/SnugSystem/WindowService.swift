@@ -36,21 +36,21 @@ public final class WindowService: WindowControl {
 
     public func look(_ window: WindowKey) async -> WindowLook? {
         await run {
-            guard let element = AX.element(for: window), let frame = AX.frame(element) else { return nil }
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window), let frame = AX.frame(element) else { return nil }
             return WindowLook(frame: frame, fullScreen: AX.flag(element, AX.fullScreen), minimized: AX.flag(element, kAXMinimizedAttribute))
         }
     }
 
     public func move(_ window: WindowKey, to frame: CGRect) async -> CGRect? {
         await run {
-            guard let element = AX.element(for: window) else { return nil }
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window) else { return nil }
             return Self.move(element, to: frame)
         }
     }
 
     public func setFullScreen(_ window: WindowKey, _ on: Bool) async {
         await run {
-            guard let element = AX.element(for: window) else { return }
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window) else { return }
             // 正在进出全屏的窗口不理这次设置：App 已有全屏窗口时新开的窗口出生就在进全屏，
             // 这时退出会被忽略（实测），没变过去就隔一拍再设，动画一走完就生效
             Self.wait(seconds: 5) {
@@ -65,18 +65,19 @@ public final class WindowService: WindowControl {
 
     public func setMinimized(_ window: WindowKey, _ on: Bool) async {
         await run {
-            guard let element = AX.element(for: window) else { return }
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window) else { return }
             Self.setMinimized(element, on)
         }
     }
 
     public func focus(_ window: WindowKey) async {
         await run {
-            guard let element = AX.element(for: window) else { return }
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window) else { return }
             if AX.flag(element, kAXMinimizedAttribute) { Self.setMinimized(element, false) }
             AX.raise(element)
         }
         await MainActor.run {
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil else { return }
             if NSRunningApplication(processIdentifier: window.pid)?.activate() == false {
                 Log.warn("激活 pid \(window.pid) 没成功，键盘输入可能进不了这个窗口")
             }
@@ -84,17 +85,18 @@ public final class WindowService: WindowControl {
     }
 
     public func zoom(_ window: WindowKey, steps: Int) async -> Bool {
-        await run {
-            guard steps != 0 else { return true }
-            guard let element = AX.element(for: window) else { return false }
-            // 按键投给 App，App 交给它的当前窗口：先把这个窗口设成当前窗口
+        guard steps != 0 else { return true }
+        let bundle = await MainActor.run { NSRunningApplication(processIdentifier: window.pid)?.bundleIdentifier }
+        guard let shortcut = ZoomBook.shortcut(for: bundle, increasing: steps > 0) else { return false }
+        return await run {
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window) else { return false }
             AX.raise(element)
-            let key = steps > 0 ? Self.equalKey : Self.minusKey
+            let key = shortcut == .commandMinus ? Self.minusKey : Self.equalKey
+            let flags: CGEventFlags = shortcut == .commandShiftEqual ? [.maskCommand, .maskShift] : .maskCommand
             for _ in 0..<abs(steps) {
                 for down in [true, false] {
                     guard let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down) else { continue }
-                    event.flags = .maskCommand
-                    event.postToPid(window.pid)
+                    event.flags = flags; event.postToPid(window.pid)
                 }
                 Thread.sleep(forTimeInterval: 0.08)
             }
@@ -102,14 +104,46 @@ public final class WindowService: WindowControl {
         }
     }
 
+    public func isLocked() async -> Bool { WindowIdentity.screenLocked }
+
+    public func captureWorkspace() async -> WorkspaceSnapshot? {
+        let applications = await MainActor.run { NSWorkspace.shared.runningApplications }
+        return await run {
+            let access = WorkspaceWindows(applications: applications, diagnostics: Log.warn)
+            guard let layout = WorkspaceLayout(access: access) else {
+                Log.warn("完整工作区基线暂不可用：\(access.captureFailure ?? "unknown")")
+                return nil
+            }
+            return WorkspaceSnapshot(windows: layout.windows)
+        }
+    }
+
+    public func applyWorkspace(_ snapshot: WorkspaceSnapshot, goal: WorkspaceLayout.Goal) async -> WorkspaceOutcome {
+        let layout = WorkspaceLayout(access: WorkspaceWindows(applications: [], diagnostics: Log.warn), windows: snapshot.windows)
+        while !Task.isCancelled {
+            if WindowIdentity.screenLocked { return .deferred }
+            let progress = await run { layout.advance(goal) }
+            switch progress {
+            case .complete(let verified, let skipped): return .complete(verified: verified, skipped: skipped)
+            case .failed(let ids):
+                Log.warn("工作区读回未匹配：\(layout.mismatchReasons)")
+                return .failed(ids)
+            case .pending, .waitingForMetadata: break
+            }
+            try? await Task.sleep(for: .seconds(0.35))
+        }
+        return .deferred
+    }
+
     public func snapshot() async -> [WindowKey: CGRect] {
+        guard !WindowIdentity.screenLocked else { return [:] }
         let pids = await MainActor.run { AppService.regular().map(\.processIdentifier) }
         return await run {
             var frames: [WindowKey: CGRect] = [:]
             for pid in pids {
-                for element in AX.respondingWindows(pid: pid) ?? [] where AX.isStandard(element) && !AX.flag(element, kAXMinimizedAttribute) {
+                for element in AX.respondingWindows(pid: pid) ?? [] where AX.isStandard(element) && !AX.flag(element, kAXMinimizedAttribute) && !AX.flag(element, AX.fullScreen) {
                     guard let id = AX.windowID(element), let frame = AX.frame(element) else { continue }
-                    frames[WindowKey(pid: pid, id: id)] = frame
+                    frames[WindowIdentity.key(pid: pid, id: id)] = frame
                 }
             }
             return frames
@@ -117,9 +151,11 @@ public final class WindowService: WindowControl {
     }
 
     public func restore(_ snapshot: [WindowKey: CGRect], except: WindowKey?) async {
+        guard !WindowIdentity.screenLocked else { return }
         await run {
             for (window, saved) in snapshot where window != except {
-                guard let element = AX.element(for: window), let now = AX.frame(element), !now.matches(saved) else { continue }
+                guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window),
+                      !AX.flag(element, kAXMinimizedAttribute), !AX.flag(element, AX.fullScreen), let now = AX.frame(element), !now.matches(saved) else { continue }
                 let got = Self.move(element, to: saved)
                 Log.info("系统挪了 pid \(window.pid) 的窗口 \(now.short)，已放回 \(saved.short)"
                          + (got.map { $0.matches(saved) } == true ? "" : "（没对上，现在 \(got?.short ?? "?")）"))
@@ -133,7 +169,7 @@ public final class WindowService: WindowControl {
         return await run {
             (AX.respondingWindows(pid: pid) ?? []).compactMap { element in
                 guard AX.isStandard(element), let id = AX.windowID(element), shown.contains(id) else { return nil }
-                return Self.info(element, key: WindowKey(pid: pid, id: id), of: app)
+                return Self.info(element, key: WindowIdentity.key(pid: pid, id: id), of: app)
             }
         }
     }
@@ -142,7 +178,7 @@ public final class WindowService: WindowControl {
         guard let app = Self.app(pid) else { return nil }
         return await run {
             for element in AX.respondingWindows(pid: pid) ?? [] where AX.isAsking(element) {
-                if let id = AX.windowID(element) { return Self.info(element, key: WindowKey(pid: pid, id: id), of: app) }
+                if let id = AX.windowID(element) { return Self.info(element, key: WindowIdentity.key(pid: pid, id: id), of: app) }
             }
             return nil
         }
@@ -150,7 +186,7 @@ public final class WindowService: WindowControl {
 
     public func close(_ window: WindowKey) async -> Bool {
         await run {
-            guard let element = AX.element(for: window),
+            guard !WindowIdentity.screenLocked, WindowIdentity.matches(window), Self.serverInfo(window) != nil, let element = AX.element(for: window),
                   let button = AX.attribute(element, kAXCloseButtonAttribute), CFGetTypeID(button) == AXUIElementGetTypeID()
             else { return false }
             return AX.press(button as! AXUIElement)
@@ -169,7 +205,7 @@ public final class WindowService: WindowControl {
                 var app = app
                 app.windows = AX.allWindows(pid: app.pid) { self.remoteWindows(pid: app.pid, now: now) }
                     .filter(AX.isStandard)
-                    .compactMap { element in AX.windowID(element).map { Self.info(element, key: WindowKey(pid: app.pid, id: $0), of: app.app) } }
+                    .compactMap { element in AX.windowID(element).map { Self.info(element, key: WindowIdentity.key(pid: app.pid, id: $0), of: app.app) } }
                 return app
             }
             return AppList.ordered(filled, frontToBack: Self.frontToBack())
@@ -200,6 +236,7 @@ public final class WindowService: WindowControl {
 
     /// 窗口服务器里这个窗口的信息；没有、或编号已经归了别的进程返回 nil
     private static func serverInfo(_ window: WindowKey) -> [String: Any]? {
+        guard WindowIdentity.status(window) != .changed else { return nil }
         guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], window.id) as? [[String: Any]])?.first,
               (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == window.pid else { return nil }
         return info

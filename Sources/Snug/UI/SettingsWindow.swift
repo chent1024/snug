@@ -22,6 +22,12 @@ struct SettingsView: View {
                 Toggle(isOn: binding(state.config.phoneScreen, intents.setPhoneScreen)) {
                     SettingLabel("手机屏", detail: "UU远程 中增加竖屏", symbol: "iphone", tint: .blue)
                 }
+                Picker(selection: binding(state.config.screenSize, intents.setScreenSize)) {
+                    ForEach(PhoneScreenSize.allCases, id: \.self) { size in Text(size.label).tag(size) }
+                } label: {
+                    SettingLabel("基础尺寸", detail: "下次建屏生效 · 大窗口自动适配", symbol: "rectangle.portrait", tint: .blue)
+                }
+                .disabled(!state.config.phoneScreen)
                 Toggle(isOn: binding(state.config.gestures, intents.setGestures)) {
                     SettingLabel("触控手势", detail: "单指滚动 · 长按选择 · 长按松开右键", symbol: "hand.draw.fill", tint: .orange)
                 }
@@ -29,7 +35,7 @@ struct SettingsView: View {
                 LabeledContent {
                     ZoomSlider(steps: binding(state.config.zoomSteps, intents.setZoomSteps))
                 } label: {
-                    SettingLabel("字号放大", detail: "终端、编辑器", symbol: "textformat.size", tint: .green)
+                    SettingLabel("字号放大", detail: "ChatGPT、终端、编辑器", symbol: "textformat.size", tint: .green)
                 }
                 .disabled(!state.config.phoneScreen)
             }

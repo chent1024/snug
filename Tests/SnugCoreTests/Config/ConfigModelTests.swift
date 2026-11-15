@@ -10,6 +10,7 @@ struct ConfigModelTests {
         #expect(c.phoneScreen)
         #expect(c.gestures)
         #expect(c.zoomSteps == 2)
+        #expect(c.screenSize == .redmi)
         #expect(!c.welcomed)
         #expect(c.updateSource == .tencent)
         #expect(c.lastVersion == nil)
@@ -29,6 +30,7 @@ struct ConfigModelTests {
         #expect(c.gestures == false)
         #expect(c.phoneScreen)
         #expect(c.zoomSteps == 2)
+        #expect(c.screenSize == .redmi)
     }
 
     @Test("手改出界的字号级数夹回 0...4")
@@ -39,11 +41,23 @@ struct ConfigModelTests {
         #expect(low.zoomSteps == 0)
     }
 
+    @Test("现用两尺寸配置和4级字号升级后保留")
+    func phoneSizeMigration() throws {
+        for size in [PhoneScreenSize.redmi, .iphone13] {
+            let json = "{\"screenSize\":\"\(size.rawValue)\",\"zoomSteps\":4,\"welcomed\":true}"
+            let c = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+            #expect(c.screenSize == size)
+            #expect(c.zoomSteps == 4)
+            #expect(c.welcomed)
+        }
+    }
+
     @Test("编码再解码保持不变")
     func roundTrip() throws {
         var c = AppConfig()
         c.phoneScreen = false
         c.zoomSteps = 3
+        c.screenSize = .iphone13
         c.welcomed = true
         c.updateSource = .github
         c.lastVersion = Version(major: 2, minor: 1, patch: 0)

@@ -12,14 +12,14 @@ import SnugCore
 @MainActor
 public final class TouchTap {
     /// 手机屏的范围（CGEvent 坐标）。主线程写，监听线程读
-    private let region = OSAllocatedUnfairLock<CGRect?>(initialState: nil)
+    private let region = OSAllocatedUnfairLock<(rect: CGRect, profile: PhoneScreenSize)?>(initialState: nil)
     private var session: TapSession?
 
     public init() {}
 
     public var isRunning: Bool { session != nil }
 
-    public func setRegion(_ rect: CGRect?) { region.withLock { $0 = rect } }
+    public func setRegion(_ rect: CGRect?, profile: PhoneScreenSize) { region.withLock { $0 = rect.map { ($0, profile) } } }
 
     /// 起监听线程，等它报告监听建没建成（没有辅助功能权限时建不成）
     @discardableResult
@@ -48,7 +48,7 @@ private final class TapSession: @unchecked Sendable {
     /// eventSourceUserData 里的记号（'SNUG'）
     static let marker: Int64 = 0x534E_5547
 
-    private let region: OSAllocatedUnfairLock<CGRect?>
+    private let region: OSAllocatedUnfairLock<(rect: CGRect, profile: PhoneScreenSize)?>
     /// 监听线程的 run loop：start 等它建好才返回，之后只读
     private var runLoop: CFRunLoop?
 
@@ -59,7 +59,7 @@ private final class TapSession: @unchecked Sendable {
     private var coastTimer: CFRunLoopTimer?
     private var isUU: [pid_t: Bool] = [:]
 
-    init(region: OSAllocatedUnfairLock<CGRect?>) { self.region = region }
+    init(region: OSAllocatedUnfairLock<(rect: CGRect, profile: PhoneScreenSize)?>) { self.region = region }
 
     func start() -> Bool {
         let ready = DispatchSemaphore(value: 0)
@@ -126,7 +126,8 @@ private final class TapSession: @unchecked Sendable {
         guard event.getIntegerValueField(.eventSourceUserData) != Self.marker, fromUU(event) else { return pass }
 
         let input = TouchInput(kind, at: event.location, time: ProcessInfo.processInfo.systemUptime)
-        let response = translator.handle(input, phoneScreen: region.withLock { $0 })
+        let scope = region.withLock { $0 }
+        let response = translator.handle(input, phoneScreen: scope?.rect, profile: scope?.profile ?? .redmi)
         if kind == .press, !response.passOriginal { heldPress = event.copy() }
         response.commands.forEach { perform($0, current: event) }
         if kind == .release { heldPress = nil }

@@ -23,6 +23,14 @@
 
 > 承接自 [aoyamashou/UUyc-companion](https://github.com/aoyamashou/UUyc-companion)（UU远程伴侣，作者 AoyamaShou，MIT 许可），完整保留原作者的版权声明与提交历史。2.0 起围绕「手机屏」重新设计。
 
+## 个人定制分支
+
+本分支基于上游 2.3.0 最新主线，保留 App 资源库、新建窗口和自适应宽度。源码位于 [chent1024/snug 的 codex/mobile-workspace](https://github.com/chent1024/snug/tree/codex/mobile-workspace)；下方官方下载及更新源仍属于上游版本，不包含这些定制。
+
+- 基础尺寸只保留红米 488×1084 与 iPhone 13 585×1266，标准 1×，下次建屏生效；宽窗口仍按比例自动选择更宽档位。
+- 进入手机屏后统一收拢当前桌面的普通工作窗口，切换时留在手机屏，断开后统一核验原显示器、位置、尺寸和桌面归属。物理屏保持开启；自动收拢不展开最小化、不退出全屏、不搬其他桌面的窗口。资源库中主动打开特殊窗口仍按上游显式操作处理。
+- 当前名为 ChatGPT、标识为 `com.openai.codex` 的应用使用 ⌘＋/⌘－，最多按默认设置放大 4 级；只撤回本轮增加的级数，不重置原字号。此目标的快捷键已由用户手工确认，代理未操作该应用实测。
+
 ## 📥 下载
 
 <img src="Assets/AppIcon/AppIcon-1024.png" width="88" align="left" alt="Snug 图标">
@@ -137,12 +145,12 @@ rm ~/Library/LaunchAgents/com.corndog.uudisplay.watchdog-agent.plist
    <img src="https://dl.zephyrxiang.com/snug/media/uu-screen-picker.212fdbe9.png" width="50%" alt="UU远程 的屏幕列表：显示屏 3（Snug 手机屏）">
 
 2. **选择 App 或窗口**：在 App 资源库中轻点 App 或窗口，即铺满整屏；未运行的 App 直接打开
-3. **切换窗口**：轻点底部指示条返回 App 资源库；另选窗口时，原窗口自动归位
+3. **切换窗口**：轻点底部指示条返回 App 资源库；另选窗口时，原工作窗口留在手机屏；断开后统一归位
 4. **结束远程**：窗口回到原位、字号复原，手机屏随之移除
 
 ## 🔒 隔离与还原
 
-- **只改动手机屏**：不更改主显示器，不关闭任何屏幕，不触碰其他窗口
+- **保留物理屏配置**：不更改主显示器、不关闭物理屏；只自动收拢已记录的当前桌面普通窗口
 - **先记录，后改动**：窗口的原始位置与字号先行记录，Snug 意外退出后也能还原
 - **无响应时保持原状**：App 暂时无响应时不强行移动窗口，并在屏上说明原因
 - **不联网**：不连接任何服务器，不收集任何数据
@@ -152,9 +160,9 @@ rm ~/Library/LaunchAgents/com.corndog.uudisplay.watchdog-agent.plist
 | 限制 | 说明 |
 | :--- | :--- |
 | 依赖 macOS 未公开接口 | 系统大版本更新后可能失效 |
-| 屏幕比例以 iPhone 17 Pro Max 为准 | 其他机型可能有少量黑边；仅提供竖屏 |
+| 两套竖屏基础尺寸 | 红米与 iPhone 13；受 UU 工具栏及窗口最小尺寸影响，画面可能留边或切换更宽档位 |
 | 部分窗口字号偏小 | 系统设置、Safari 等限定了最小宽度，手机屏改用刚好容纳窗口的分辨率，窗口仍铺满，字随之缩小，可双指放大 |
-| 字号放大仅限终端与编辑器 | Ghostty、终端、iTerm2、VS Code、Cursor、Zed；浏览器不做调整 |
+| 字号放大仅限已支持应用 | Ghostty、终端、iTerm2、VS Code、Cursor、Zed 与已确认的 ChatGPT/Codex；浏览器不做调整 |
 | 非网易官方软件 | 与 UU远程 及其开发商无关；UU远程 更新后部分功能可能受影响 |
 | 远程结束后手机屏偶尔未移除 | 推流停止未被系统日志记录时出现，菜单栏仍显示「远程中」；在设置中关闭手机屏即可还原 |
 

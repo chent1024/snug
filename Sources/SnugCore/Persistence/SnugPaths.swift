@@ -22,6 +22,8 @@ public struct SnugPaths: Equatable, Sendable {
     public var config: URL { file("config.json") }
     /// 手机屏上那个窗口的还原记录：放上去之前写，放回原位才删；崩溃后下次启动按它还原
     public var phoneRecord: URL { file("phone-screen.json") }
+    /// 全会话物理原位；与焦点窗口的临时铺满/字号记录职责分开。
+    public var workspace: URL { file("workspace.json") }
     /// 每个 App 在手机屏上记住的字号级数
     public var zoomBook: URL { file("zoom.json") }
 

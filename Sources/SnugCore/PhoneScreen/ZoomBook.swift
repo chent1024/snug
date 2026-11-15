@@ -1,8 +1,8 @@
-// 字号：手机屏已经是 2 倍高清能做到的最小尺寸（短边 540 点），字再大只能靠 App 自己的 ⌘+ / ⌘-。
+// 字号：屏幕适配之外，内容的字号使用各 App 自己的可逆放大 / 缩小快捷键。
 // 放上手机屏时按这个 App 记住的级数放大（没记过就用设置里的默认级数），放回原位时按同样的级数缩回，
 // 不用 ⌘0：那会把用户原来的字号也一起清掉。
 // 浏览器不在名单里：它们按网站记缩放、一直记着，放大会连带同一网站的其它窗口，
-// 换了网页再缩回又缩到别的网站上，改动收不回来。网页在 540 点宽的屏上本来就按窄屏排版
+// 换了网页再缩回又缩到别的网站上，改动收不回来。网页在窄屏上本来就按窄屏排版
 import Foundation
 
 public struct ZoomBook: Codable, Equatable, Sendable {
@@ -10,6 +10,8 @@ public struct ZoomBook: Codable, Equatable, Sendable {
     public static let zoomableApps: Set<String> = [
         "com.mitchellh.ghostty", "com.apple.Terminal", "com.googlecode.iterm2",
         "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed",
+        // 当前显示为 ChatGPT 的客户端实际使用这个标识；用户已确认 ⌘+ / ⌘- 可放大并还原。
+        "com.openai.codex",
     ]
     /// 相对原来最多缩小 / 放大几级
     public static let range = -4...8
@@ -21,6 +23,13 @@ public struct ZoomBook: Codable, Equatable, Sendable {
 
     public static func isZoomable(_ bundleID: String?) -> Bool {
         bundleID.map(zoomableApps.contains) ?? false
+    }
+
+    /// 只对已经验证的 App 发快捷键。OpenAI 客户端用真正的 ⌘+（⌘⇧=），不能沿用终端的 ⌘=。
+    public static func shortcut(for bundleID: String?, increasing: Bool) -> ZoomShortcut? {
+        guard isZoomable(bundleID) else { return nil }
+        guard increasing else { return .commandMinus }
+        return bundleID == "com.openai.codex" ? .commandShiftEqual : .commandEqual
     }
 
     /// 放上手机屏时该放大几级；不支持调字号的 App 返回 0

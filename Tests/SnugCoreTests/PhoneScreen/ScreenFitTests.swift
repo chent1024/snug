@@ -2,66 +2,96 @@ import CoreGraphics
 import Testing
 @testable import SnugCore
 
-@Suite("屏幕适配 ScreenFit")
+@Suite("按设备比例屏幕适配 ScreenFit")
 struct ScreenFitTests {
-    /// 基准宽度下的可放区域：950 扣掉菜单栏 25、小横条 28
-    private let baseArea = CGSize(width: 540, height: 897)
+    private func area(for profile: PhoneScreenSize, width: Int? = nil) -> CGSize {
+        let width = width ?? profile.width
+        var result = ScreenFit.size(width: width, for: profile)
+        result.height -= 25 + ScreenFit.homeBarHeight(screenWidth: CGFloat(width), for: profile)
+        return result
+    }
 
-    @Test("档位：540 到 1080，每 10 点一档，宽高比都和 540×950 一样；像素上限是最宽一档的 2 倍")
-    func ladder() {
-        #expect(ScreenFit.widths.first == 540)
-        #expect(ScreenFit.widths.last == 1080)
-        #expect(zip(ScreenFit.widths, ScreenFit.widths.dropFirst()).allSatisfy { $1 - $0 == 10 })
-        #expect(ScreenFit.size(width: 540) == CGSize(width: 540, height: 950))
-        #expect(ScreenFit.size(width: 1080) == CGSize(width: 1080, height: 1900))
-        for width in ScreenFit.widths {
-            let size = ScreenFit.size(width: width)
-            #expect(abs(size.height / size.width - 950.0 / 540) < 0.001)
+    @Test("只有两组原画面像素，档位逐10点递增并包含精确最大值", arguments: PhoneScreenSize.allCases)
+    func ladder(profile: PhoneScreenSize) {
+        let widths = ScreenFit.widths(for: profile)
+        #expect(widths.first == profile.width)
+        #expect(widths.last == profile.width * 2)
+        #expect(Set(widths).count == widths.count)
+        #expect(zip(widths, widths.dropFirst()).allSatisfy { $1 > $0 && $1 - $0 <= 10 })
+        #expect(widths.dropLast().enumerated().allSatisfy { $0.element == profile.width + $0.offset * 10 })
+        #expect(ScreenFit.size(width: profile.width, for: profile) == CGSize(width: profile.width, height: profile.height))
+        #expect(ScreenFit.maxPixels(for: profile) == CGSize(width: profile.width * 2, height: profile.height * 2))
+        for width in widths {
+            let size = ScreenFit.size(width: width, for: profile)
+            #expect(abs(size.height - CGFloat(width) * CGFloat(profile.height) / CGFloat(profile.width)) <= 0.5)
         }
-        #expect(ScreenFit.maxPixels == CGSize(width: 2160, height: 3800))
     }
 
-    @Test("装得下就不换（App 取整差一两点也算装得下）")
-    func fits() {
-        #expect(ScreenFit.width(toFit: baseArea, in: baseArea, at: 540) == 540)
-        #expect(ScreenFit.width(toFit: CGSize(width: 400, height: 600), in: baseArea, at: 540) == 540)
-        #expect(ScreenFit.width(toFit: CGSize(width: 542, height: 898), in: baseArea, at: 540) == 540)
+    @Test("iPhone585不截成584，最宽1170不落在步长上也登记")
+    func oddBaseAndLastStep() {
+        #expect(ScreenFit.widths(for: .iphone13).prefix(2) == [585, 595])
+        #expect(ScreenFit.widths(for: .iphone13).suffix(2) == [1165, 1170])
+        #expect(ScreenFit.widths(for: .redmi).suffix(2) == [968, 976])
+        #expect(ScreenFit.size(width: 585, for: .iphone13) == CGSize(width: 585, height: 1266))
     }
 
-    @Test("宽度超了：装得下的最窄一档（系统设置 740、Safari 574、Typeless 988）")
+    @Test("装得下就不换，保留两点取整容差", arguments: PhoneScreenSize.allCases)
+    func fits(profile: PhoneScreenSize) {
+        let available = area(for: profile)
+        #expect(ScreenFit.width(toFit: available, in: available, at: profile.width, for: profile) == profile.width)
+        #expect(ScreenFit.width(toFit: CGSize(width: 400, height: 600), in: available, at: profile.width, for: profile) == profile.width)
+        #expect(ScreenFit.width(toFit: CGSize(width: available.width + 2, height: available.height + 1), in: available, at: profile.width, for: profile) == profile.width)
+    }
+
+    @Test("选容纳宽度的最窄档，不用旧540基准")
     func wider() {
-        #expect(ScreenFit.width(toFit: CGSize(width: 740, height: 897), in: baseArea, at: 540) == 740)
-        #expect(ScreenFit.width(toFit: CGSize(width: 574, height: 897), in: baseArea, at: 540) == 580)
-        #expect(ScreenFit.width(toFit: CGSize(width: 988, height: 897), in: baseArea, at: 540) == 990)
-        // 正好是整档的最小宽度：浮点误差不能让它多进一档
-        #expect(ScreenFit.width(toFit: CGSize(width: 580, height: 897), in: baseArea, at: 540) == 580)
-        #expect(ScreenFit.width(toFit: CGSize(width: 850, height: 897), in: baseArea, at: 540) == 850)
+        let redmi = area(for: .redmi)
+        let iphone = area(for: .iphone13)
+        #expect(ScreenFit.width(toFit: CGSize(width: 740, height: redmi.height), in: redmi, at: 488, for: .redmi) == 748)
+        #expect(ScreenFit.width(toFit: CGSize(width: 740, height: iphone.height), in: iphone, at: 585, for: .iphone13) == 745)
+        #expect(ScreenFit.width(toFit: CGSize(width: 588, height: redmi.height), in: redmi, at: 488, for: .redmi) == 588)
+        #expect(ScreenFit.width(toFit: CGSize(width: 785, height: iphone.height), in: iphone, at: 585, for: .iphone13) == 785)
     }
 
-    @Test("高度超了：按高度等比换档，宽高比不变（不会又高又窄）")
-    func taller() {
-        // 540 × 1000 / 897 ≈ 602 → 610；610 那一档可放区域高 1073 - 25 - 32 = 1016，装得下 1000
-        #expect(ScreenFit.width(toFit: CGSize(width: 540, height: 1000), in: baseArea, at: 540) == 610)
-        // 宽高都超：按超得多的那一边
-        #expect(ScreenFit.width(toFit: CGSize(width: 600, height: 1200), in: baseArea, at: 540) == 730)
+    @Test("高度超出也按相同比例找档", arguments: PhoneScreenSize.allCases)
+    func taller(profile: PhoneScreenSize) {
+        let available = area(for: profile)
+        let result = ScreenFit.width(toFit: CGSize(width: available.width, height: available.height * 1.25),
+                                     in: available, at: profile.width, for: profile)
+        #expect(result == (profile == .redmi ? 618 : 735))
+        #expect(result > profile.width)
     }
 
-    @Test("比最宽一档还宽：用最宽一档")
-    func capped() {
-        #expect(ScreenFit.width(toFit: CGSize(width: 1200, height: 897), in: baseArea, at: 540) == 1080)
-        #expect(ScreenFit.width(toFit: CGSize(width: 1200, height: 1838), in: CGSize(width: 1080, height: 1838), at: 1080) == 1080)
+    @Test("宽高都超按较大比例，超过最大档则封顶", arguments: PhoneScreenSize.allCases)
+    func capped(profile: PhoneScreenSize) {
+        let available = area(for: profile)
+        #expect(ScreenFit.width(toFit: CGSize(width: profile.width * 3, height: profile.height * 3),
+                                in: available, at: profile.width, for: profile) == profile.width * 2)
+        let maxArea = area(for: profile, width: profile.width * 2)
+        #expect(ScreenFit.width(toFit: CGSize(width: maxArea.width + 100, height: maxArea.height),
+                                in: maxArea, at: profile.width * 2, for: profile) == profile.width * 2)
     }
 
-    @Test("已经在更宽的一档时窗口又变宽了：按这一档的比例往上找")
-    func fromWiderStep() {
-        #expect(ScreenFit.width(toFit: CGSize(width: 800, height: 1242), in: CGSize(width: 740, height: 1242), at: 740) == 800)
+    @Test("更宽档继续扩展按当前档比例", arguments: PhoneScreenSize.allCases)
+    func fromWiderStep(profile: PhoneScreenSize) {
+        let widths = ScreenFit.widths(for: profile)
+        let current = widths[10]
+        let next = widths[20]
+        let available = area(for: profile, width: current)
+        #expect(ScreenFit.width(toFit: CGSize(width: CGFloat(next), height: available.height),
+                                in: available, at: current, for: profile) == next)
     }
 
-    @Test("Snug 自己的面板跟着档位放大：小横条在手机上一样高")
-    func scale() {
-        #expect(ScreenFit.scale(screenWidth: 540) == 1)
-        #expect(ScreenFit.scale(screenWidth: 1080) == 2)
-        #expect(ScreenFit.homeBarHeight(screenWidth: 540) == 28)
-        #expect(ScreenFit.homeBarHeight(screenWidth: 1080) == 56)
+    @Test("面板与底栏随档位缩放，两设备各自基准为1", arguments: PhoneScreenSize.allCases)
+    func scale(profile: PhoneScreenSize) {
+        #expect(ScreenFit.scale(screenWidth: CGFloat(profile.width), for: profile) == 1)
+        #expect(ScreenFit.scale(screenWidth: CGFloat(profile.width * 2), for: profile) == 2)
+        #expect(ScreenFit.homeBarHeight(screenWidth: CGFloat(profile.width), for: profile) == 28)
+        #expect(ScreenFit.homeBarHeight(screenWidth: CGFloat(profile.width * 2), for: profile) == 56)
+    }
+
+    @Test("可放区域暂为空时不除零或擅自换档", arguments: PhoneScreenSize.allCases)
+    func unavailableArea(profile: PhoneScreenSize) {
+        #expect(ScreenFit.width(toFit: CGSize(width: 700, height: 1000), in: .zero, at: profile.width, for: profile) == profile.width)
     }
 }

@@ -6,14 +6,16 @@ import Foundation
 /// 建屏、撤屏、换档。CGVirtualDisplay 要在主线程建和释放
 @MainActor
 public protocol PhoneDisplays: AnyObject {
-    /// 建一块手机屏（档位见 ScreenFit），等它上线，尽量切到基准宽度（切不成只记日志、照样返回）。
+    /// 建一块手机屏（档位见 ScreenFit），等它上线并核验基础模式与NSScreen尺寸；匹配不了则安全撤回并抛错。
     /// 上线不了就换备用身份，都不行就抛错
     func create() async throws -> DisplayID
     /// 释放，等它下线
     func retire(_ id: DisplayID) async
-    /// 此刻是哪一档（2 倍模式的宽度，点）；不是 2 倍、或屏不在了返回 nil
+    /// 此刻是哪一档（标准1×模式的宽度）；不符合设备模式表或屏不在了返回nil
     func width(_ id: DisplayID) -> Int?
-    /// 换到这一档的 2 倍模式，等界面认到新尺寸再返回。换不成只记日志：窗口照样能用，只是没铺满
+    /// 当前屏创建时冻结的基础档；修改设置不改变它。
+    func profile(_ id: DisplayID) -> PhoneScreenSize?
+    /// 换到这一档的标准1×模式，等界面认到新尺寸再返回。换不成只记日志：窗口照样能用，只是没铺满
     func setWidth(_ id: DisplayID, _ width: Int) async
     /// 整块屏的范围（辅助功能坐标，左上原点）。撤屏前用它认出原本就在这块屏上的窗口
     func bounds(_ id: DisplayID) -> CGRect?
@@ -24,16 +26,18 @@ public protocol PhoneDisplays: AnyObject {
 }
 
 /// 窗口此刻的样子
-public struct WindowLook: Equatable, Sendable {
+public struct WindowLook: Codable, Equatable, Sendable {
     /// 辅助功能坐标，左上原点。最小化的窗口是它还原后的位置
     public var frame: CGRect
     public var fullScreen: Bool
     public var minimized: Bool
+    public var desktop: WorkspaceDesktop?
 
-    public init(frame: CGRect, fullScreen: Bool = false, minimized: Bool = false) {
+    public init(frame: CGRect, fullScreen: Bool = false, minimized: Bool = false, desktop: WorkspaceDesktop? = nil) {
         self.frame = frame
         self.fullScreen = fullScreen
         self.minimized = minimized
+        self.desktop = desktop
     }
 }
 
@@ -56,7 +60,7 @@ public protocol WindowControl: Sendable {
     func setMinimized(_ window: WindowKey, _ on: Bool) async
     /// 提到最前并激活它的 App（最小化的先还原）：手机上敲的字才会进这个窗口
     func focus(_ window: WindowKey) async
-    /// 给窗口所在的 App 发 ⌘= / ⌘-（steps 为负就缩小）。找不到窗口就不发，返回 false
+    /// 按应用规则给窗口所在的App发字号放大/缩小快捷键（steps 为负就缩小）。找不到窗口就不发，返回 false
     @discardableResult
     func zoom(_ window: WindowKey, steps: Int) async -> Bool
     /// App 此刻在屏上的标准窗口。等新窗口出现时 0.1 秒问一次，只问当前桌面空间，一次不到 1 毫秒
@@ -67,6 +71,10 @@ public protocol WindowControl: Sendable {
     func close(_ window: WindowKey) async -> Bool
     /// 当前桌面空间里普通窗口此刻的位置。加屏、撤屏前拍一张：macOS 会把窗口挪来挪去
     func snapshot() async -> [WindowKey: CGRect]
+    /// 完整接管前记录；不可读时不返回部分基线。
+    func captureWorkspace() async -> WorkspaceSnapshot?
+    func isLocked() async -> Bool
+    func applyWorkspace(_ snapshot: WorkspaceSnapshot, goal: WorkspaceLayout.Goal) async -> WorkspaceOutcome
     /// 把位置变了的窗口放回快照里的位置（except 那个除外）
     func restore(_ snapshot: [WindowKey: CGRect], except: WindowKey?) async
 }

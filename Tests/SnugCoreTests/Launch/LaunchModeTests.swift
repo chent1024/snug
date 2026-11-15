@@ -23,9 +23,9 @@ struct LaunchModeTests {
         }
     }
 
-    @Test("--set-mode <屏幕编号> <宽>")
+    @Test("--set-mode <屏幕编号> <宽> <高>")
     func setMode() throws {
-        #expect(try LaunchMode.parse(["--set-mode", "14", "740"]) == .setMode(display: 14, width: 740))
+        #expect(try LaunchMode.parse(["--set-mode", "14", "740", "1400"]) == .setMode(display: 14, width: 740, height: 1400))
     }
 
     @Test("--dump-uu、--preview-phone")

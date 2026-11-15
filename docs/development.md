@@ -83,15 +83,22 @@ App 将本机已安装的 Snug 按同样方式切块，只按字节范围从最�
 | `--render-<界面> <目录>` | 将界面渲染为 PNG：`settings` / `welcome` / `about` / `legacy` / `phone` / `update`（不启动监控，不改动屏幕） |
 | `--preview-phone` | 正常启动，但不等待手机连接即创建手机屏，无需手机即可查看屏上的列表（**会真实创建一块屏幕**） |
 | `--dump-uu` | 打印从 UU远程 读取到的表格行、控制端与当前屏幕 |
-| `--set-mode <屏幕编号> <宽>` | 辅助进程模式：将手机屏切换至该宽度一档的 2 倍模式后立即退出（供主程序内部调用） |
+| `--set-mode <屏幕编号> <宽> <高>` | 辅助进程模式：将手机屏切换至指定标准 1×像素模式后立即退出（供主程序内部调用） |
 
 ## 数据与日志
 
 | 位置 | 内容 |
 | :--- | :--- |
 | `~/Library/Application Support/Snug/config.json` | 设置 |
-| `~/Library/Application Support/Snug/phone-screen.json` | 手机屏上窗口的还原记录 |
+| `~/Library/Application Support/Snug/workspace.json` | 整会话窗口原布局；身份和桌面核验后才清理 |
+| `~/Library/Application Support/Snug/phone-screen.json` | 当前焦点窗口的临时几何/字号增量记录 |
 | `~/Library/Application Support/Snug/zoom.json` | 各 App 记忆的字号级数 |
 | `~/Library/Logs/Snug.log` | 日志 |
 
 实现细节见 [工作原理](how-it-works.md)。
+
+### 本分支验证
+
+`scripts/snug check` 在 Command Line Tools 环境使用原生 SwiftPM 后端并显式加载 Swift Testing，必须看到实际测试数量，编译成功不等于测试通过。`scripts/snug app` 只构建签名，不安装。
+
+`CODEX_TASK_DATA_DIR=/Volumes/ssd/Developer/Codex/tasks scripts/test-workspace-native.sh` 只创建自己的窗口子进程，测试两个普通窗口收拢、序列化后用全新原生访问实例恢复，并保持一个最小化窗口；不改屏幕拓扑，不操作用户应用。权限、锁屏或桌面接口不可用时退出 77，须记为未验证。它不替代手机连接、真实虚拟屏、用户工作窗口或目标应用的验收。

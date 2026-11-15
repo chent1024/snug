@@ -35,11 +35,11 @@ struct PhoneDeskAppTests {
         rig.desk.open(chat)
         await rig.desk.idle()
         let pid = try #require(await rig.apps.pid(of: chat))
-        let window = WindowInfo(key: WindowKey(pid: pid, id: 30), app: chat.name, bundleID: chat.bundleID, title: "")
-        #expect(rig.journal.all == ["open com.openai.codex", "move 30 \(phoneArea.short) ✎", "focus 30"])
+        let window = WindowInfo(key: testWindowKey(pid: pid, id: 30), app: chat.name, bundleID: chat.bundleID, title: "")
+        #expect(rig.journal.all == ["open com.openai.codex", "move 30 \(phoneArea.short) ✎", "focus 30", "zoom 30 +2 ✎"])
         #expect(rig.desk.state.placed?.window == window)
         #expect(rig.record?.original == chatHome)
-        #expect(works() == [.opening(chat), .placing(window), nil])
+        #expect(works() == [.opening(chat), .placing(window), .zooming, nil])
         #expect(rig.timeline.now - started >= 1.2)
     }
 
@@ -47,7 +47,7 @@ struct PhoneDeskAppTests {
     func reopenSameWindow() async throws {
         let rig = try Rig()
         await rig.ready()
-        let key = WindowKey(pid: 600, id: 31)
+        let key = testWindowKey(pid: 600, id: 31)
         rig.apps.run(chat, pid: 600)
         rig.windows.add(key, frame: chatHome, hidden: true)
         rig.apps.willReshow(chat, id: 31)
@@ -79,7 +79,7 @@ struct PhoneDeskAppTests {
         rig.apps.willSpawn(ghosttyApp, .init(id: 40, frame: ghosttyNew, delay: 0.3))
         rig.desk.newWindow(app)
         await rig.desk.idle()
-        #expect(rig.desk.state.placed?.window.key == WindowKey(pid: 10, id: 40))
+        #expect(rig.desk.state.placed?.window.key == testWindowKey(pid: 10, id: 40))
         #expect(rig.windows.window(ghostty.key)?.frame == ghosttyHome)
     }
 
@@ -333,8 +333,8 @@ struct PhoneDeskAppTests {
         rig.desk.open(chat)
         await rig.desk.idle()
         let pid = try #require(await rig.apps.pid(of: chat))
-        let chatWindow = WindowInfo(key: WindowKey(pid: pid, id: 30), app: chat.name, bundleID: chat.bundleID, title: "")
-        #expect(works() == [nil, .opening(chat), .placing(chatWindow), nil, .placing(notes), nil])
+        let chatWindow = WindowInfo(key: testWindowKey(pid: pid, id: 30), app: chat.name, bundleID: chat.bundleID, title: "")
+        #expect(works() == [nil, .opening(chat), .placing(chatWindow), .zooming, nil, .placing(notes), nil])
     }
 
     @Test("退出时手机屏上它的窗口放不回去（App 卡住）：不退，提示无响应")

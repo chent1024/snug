@@ -7,10 +7,15 @@ public struct WindowKey: Hashable, Codable, Sendable, CustomStringConvertible {
     public let pid: Int32
     /// CGWindowID
     public let id: UInt32
+    /// 内核进程启动秒数与本次开机身份；可选仅用于读取旧单窗记录。
+    public let launchTime: Double?
+    public let bootSession: String?
 
-    public init(pid: Int32, id: UInt32) {
+    public init(pid: Int32, id: UInt32, launchTime: Double? = nil, bootSession: String? = nil) {
         self.pid = pid
         self.id = id
+        self.launchTime = launchTime
+        self.bootSession = bootSession
     }
 
     public var description: String { "\(pid)/\(id)" }

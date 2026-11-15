@@ -16,8 +16,17 @@ struct PhoneHomeView: View {
     let search: PhoneSearch
     let intents: any PhoneIntents
 
-    @State private var tab: Tab
-    @State private var confirming: Confirm?
+    // CLT没有macOS27的SwiftUIMacros；用已有SwiftUI观察机制保存这两个本地状态。
+    @StateObject private var local: LocalState
+    private var tab: Tab { get { local.tab } nonmutating set { local.tab = newValue } }
+    private var confirming: Confirm? { get { local.confirming } nonmutating set { local.confirming = newValue } }
+
+    @MainActor
+    private final class LocalState: ObservableObject {
+        @Published var tab: Tab
+        @Published var confirming: Confirm?
+        init(tab: Tab, confirming: Confirm?) { self.tab = tab; self.confirming = confirming }
+    }
 
     /// tab、confirming：渲染样例用
     init(state: AppState, catalog: AppCatalog, search: PhoneSearch, intents: any PhoneIntents,
@@ -26,8 +35,7 @@ struct PhoneHomeView: View {
         self.catalog = catalog
         self.search = search
         self.intents = intents
-        _tab = State(initialValue: tab)
-        _confirming = State(initialValue: confirming)
+        _local = StateObject(wrappedValue: LocalState(tab: tab, confirming: confirming))
     }
 
     enum Tab: CaseIterable, Identifiable {
@@ -75,7 +83,7 @@ struct PhoneHomeView: View {
                         SwiftUI.Section {
                             page.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
                         } header: {
-                            TabPicker(selection: $tab)
+                            TabPicker(selection: Binding(get: { tab }, set: { tab = $0 }))
                                 .padding(.horizontal, 20)
                                 .padding(.vertical, 12)
                                 .background(PhoneStyle.background)
@@ -155,7 +163,7 @@ struct PhoneHomeView: View {
     }
 
     private func appCard(_ app: RunningApp) -> some View {
-        AppCard(app: app, phone: phone, confirming: $confirming, icon: catalog.icon(for: app.app), intents: intents)
+        AppCard(app: app, phone: phone, confirming: Binding(get: { confirming }, set: { confirming = $0 }), icon: catalog.icon(for: app.app), intents: intents)
     }
 }
 

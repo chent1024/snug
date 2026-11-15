@@ -55,6 +55,7 @@ enum Renderer {
 final class RenderStub: AppIntents, PhoneIntents, Navigation {
     func setPhoneScreen(_ on: Bool) {}
     func setGestures(_ on: Bool) {}
+    func setScreenSize(_ size: PhoneScreenSize) {}
     func setZoomSteps(_ steps: Int) {}
     func setLaunchAtLogin(_ on: Bool) {}
     func openLoginItemsSettings() {}

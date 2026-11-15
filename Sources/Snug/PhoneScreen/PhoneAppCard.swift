@@ -186,7 +186,7 @@ private struct PlacedControls: View {
                     } else {
                         Image(systemName: "arrow.uturn.backward")
                     }
-                    Text("还原")
+                    Text(placed.inWorkspace ? "收起" : "还原")
                 }
                 .font(PhoneStyle.body.weight(.medium))
                 .padding(.horizontal, 20)

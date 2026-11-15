@@ -34,6 +34,8 @@ struct StatusText: Equatable {
         if s.quitting { return "正在还原窗口" }
         if !s.accessibilityTrusted { return "用于移动窗口与转换手势" }
         if !s.config.phoneScreen { return "手机屏已关闭" }
+        if s.phone.notice == .workspacePending { return "窗口原位待核验，恢复记录保留" }
+        if s.phone.notice == .workspaceCaptureUnavailable { return "完整布局未就绪，尚未批量移动窗口" }
         if s.connection == .idle { return nil }
         if s.gesturesFailed { return "手势转换未启用" }
         switch s.phone.screen {
@@ -41,7 +43,7 @@ struct StatusText: Equatable {
         case .failed: return "手机屏创建失败"
         case .ready:
             guard s.phoneInUse else { return "手机屏已就绪" }
-            return s.phone.placed.map { "手机屏 · \($0.window.app)" } ?? "手机屏使用中"
+            return s.phone.placed.map { "手机屏 · \($0.window.app)" } ?? (s.phone.workspaceActive ? "工作区已收拢 · 结束后统一归位" : "手机屏使用中")
         case .off:
             return ControllerKind.wantsPhoneScreen(s.controllers) ? nil : "电脑控制端，不提供手机屏"
         }
@@ -78,6 +80,8 @@ extension PhoneDesk.Notice {
         switch self {
         case .windowGone(let app): StatusText(headline: "\(app) 窗口已关闭", detail: "请另选一个窗口")
         case .windowUnresponsive(let app): StatusText(headline: "\(app) 无响应", detail: "可能正忙，请稍后再试")
+        case .workspacePending: StatusText(headline: "工作区布局待核验", detail: "原位记录保留；锁屏时解锁后继续")
+        case .workspaceCaptureUnavailable: StatusText(headline: "完整布局尚未就绪", detail: "未批量移动窗口；归还当前窗口后可重连准备")
         case .recordUnwritable: StatusText(headline: "无法保存原位置", detail: "为确保能放回原处，窗口未移动")
         case .screenNotReady: StatusText(headline: "手机屏未就绪", detail: "屏幕正在调整，请稍后再试")
         case .openFailed(let app): StatusText(headline: "无法打开 \(app)", detail: "请稍后再试")

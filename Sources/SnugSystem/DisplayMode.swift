@@ -7,22 +7,25 @@ import SnugCore
 public enum DisplayMode {
     public enum Outcome: Equatable, CustomStringConvertible {
         case switched
-        /// 这块屏没有这一档的 2 倍模式
+        /// 这块屏没有这一档的标准1倍模式
         case unavailable
         case failed(CGError)
 
         public var description: String {
             switch self {
             case .switched: "已切换"
-            case .unavailable: "没有这一档的 2 倍模式"
+            case .unavailable: "没有这一档的标准模式"
             case .failed(let err): "切换失败（CGError=\(err.rawValue)）"
             }
         }
     }
 
-    /// 此刻 2 倍模式的宽度（点）；不是 2 倍、或屏不在了返回 nil
-    public static func hiDPIWidth(_ id: DisplayID) -> Int? {
-        guard let mode = CGDisplayCopyDisplayMode(id), mode.pixelWidth == 2 * mode.width else { return nil }
+    /// 此刻标准1倍模式的宽度；像素与逻辑尺寸必须同时符合所选设备的已登记档位。
+    public static func standardWidth(_ id: DisplayID, for profile: PhoneScreenSize) -> Int? {
+        guard let mode = CGDisplayCopyDisplayMode(id), mode.isUsableForDesktopGUI(),
+              ScreenFit.widths(for: profile).contains(mode.width),
+              mode.pixelWidth == mode.width, mode.pixelHeight == mode.height,
+              mode.height == Int(ScreenFit.size(width: mode.width, for: profile).height) else { return nil }
         return mode.width
     }
 
@@ -31,11 +34,13 @@ public enum DisplayMode {
         return "\(m.width)x\(m.height)pt/\(m.pixelWidth)x\(m.pixelHeight)px"
     }
 
-    /// 帮手进程里调用：切到 2 倍的 width×height（点）。只对本次登录生效
-    public static func switchToHiDPI(_ id: DisplayID, width: Int, height: Int) -> Outcome {
+    /// 帮手进程里调用：切到指定画面像素的标准1倍模式。只对本次登录生效。
+    public static func switchToStandard(_ id: DisplayID, width: Int, height: Int) -> Outcome {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = (CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode]) ?? []
-        guard let mode = modes.first(where: { $0.width == width && $0.height == height && $0.pixelWidth == 2 * width }) else {
+        guard let mode = modes.first(where: {
+            $0.width == width && $0.height == height && $0.pixelWidth == width && $0.pixelHeight == height && $0.isUsableForDesktopGUI()
+        }) else {
             return .unavailable
         }
         var config: CGDisplayConfigRef?

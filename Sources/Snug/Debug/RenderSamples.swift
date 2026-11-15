@@ -31,13 +31,14 @@ enum RenderSamples {
     private static var settings: [RenderSample] {
         [
             setting("settings-idle") { _ in },
+            setting("settings-iphone") { $0.config.screenSize = .iphone13 },
             setting("settings-ready") { s in
                 connected(s)
             },
             setting("settings-in-use-dark", dark: true) { s in
                 connected(s)
                 s.streamedDisplay = 14
-                s.phone.placed = PhoneDesk.Placed(window: windows[0], zoom: 2)
+                s.phone.placed = PhoneDesk.Placed(window: windows[0], zoom: 2, inWorkspace: true)
             },
             setting("settings-update-available") { s in s.update.check = .available(sampleFeed) },
             setting("settings-update-too-old") { s in s.update.problem = .tooOld },
@@ -191,7 +192,7 @@ enum RenderSamples {
     ]
 
     private static var phone: [RenderSample] {
-        let placed = PhoneDesk.Placed(window: windows[0], zoom: 2)
+        let placed = PhoneDesk.Placed(window: windows[0], zoom: 2, inWorkspace: true)
         return [
             phoneSample("phone-list") { _, _ in },
             phoneSample("phone-placed") { s, _ in s.phone.placed = placed },
@@ -229,7 +230,7 @@ enum RenderSamples {
     private static func phoneSample(_ name: String, dark: Bool = false, tab: PhoneHomeView.Tab = .running,
                                     confirming: PhoneHomeView.Confirm? = nil, running list: [RunningApp] = running, loaded: Bool = true,
                                     _ configure: @escaping @MainActor (AppState, PhoneSearch) -> Void) -> RenderSample {
-        let size = ScreenFit.size(width: ScreenFit.baseWidth)
+        let size = ScreenFit.size(width: PhoneScreenSize.redmi.width, for: .redmi)
         return RenderSample(name: name, dark: dark, size: size) {
             let s = AppState()
             s.phone.screen = .ready(14)

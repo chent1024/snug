@@ -1,0 +1,216 @@
+import AppKit
+import ApplicationServices
+import SnugCore
+
+/// 仅查询普通应用的窗口身份、几何和状态，不读取标题、文档或窗口内容。
+/// 私有只读接口的声明参考 Hammerspoon extensions/spaces/private.h；不切换/创建/删除 Spaces。
+final class WorkspaceWindows: WorkspaceWindowAccess, @unchecked Sendable {
+    private typealias WindowNumber = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+    private typealias Connection = @convention(c) () -> Int32
+    private typealias DisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
+    private typealias WindowSpaces = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+    private let number = WorkspaceWindows.symbol("_AXUIElementGetWindow", WindowNumber.self)
+    private let connection = WorkspaceWindows.symbol("SLSMainConnectionID", Connection.self)
+    private let displays = WorkspaceWindows.symbol("SLSCopyManagedDisplaySpaces", DisplaySpaces.self)
+    private let spaces = WorkspaceWindows.symbol("SLSCopySpacesForWindows", WindowSpaces.self)
+    private struct Handle {
+        let element: AXUIElement
+    }
+    private var handles: [WindowKey: Handle] = [:]
+    private(set) var captureFailure: String?
+
+    private func fail(_ reason: String) -> [WorkspaceWindow]? {
+        captureFailure = reason
+        return nil
+    }
+    private let applications: [NSRunningApplication]
+    private let diagnostics: (String) -> Void
+    private var reportedRefresh: Set<WindowKey> = []
+
+    init(applications: [NSRunningApplication],
+         diagnostics: @escaping (String) -> Void = { _ in }) {
+        self.applications = applications
+        self.diagnostics = diagnostics
+    }
+
+    private static func symbol<T>(_ name: String, _ type: T.Type) -> T? {
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), name).map { unsafeBitCast($0, to: type) }
+    }
+
+    func capture() -> [WorkspaceWindow]? {
+        captureFailure = nil
+        guard !WindowIdentity.screenLocked else { return fail("Mac is locked; window baseline deferred until unlock") }
+        guard WindowIdentity.bootSession != nil, AXIsProcessTrusted(), number != nil, connection != nil, displays != nil, spaces != nil else { return fail("AX authorization or native window/desktop query unavailable") }
+        handles = [:]
+        guard let rows = Self.rows() else { return fail("CG window list unavailable") }
+        var saved: [WorkspaceWindow] = []
+        for app in applications where app.activationPolicy == .regular && !app.isTerminated {
+            guard app.processIdentifier != getpid(), app.bundleIdentifier != UURemote.bundleID else { continue }
+            let pid = app.processIdentifier
+            let appRows = rows.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+            guard !appRows.isEmpty else { continue }
+            guard let launch = WindowIdentity.launchTime(pid) else { return fail("kernel process identity unavailable, pid=\(pid)") }
+            let ax = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(ax, 0.2)
+            var windowList: CFTypeRef?
+            let windowListError = AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &windowList)
+            guard windowListError == .success, let windows = windowList as? [AXUIElement] else {
+                return fail("AX window list unavailable, pid=\(pid), error=\(windowListError.rawValue)")
+            }
+            for element in windows {
+                AXUIElementSetMessagingTimeout(element, 0.2)
+                guard let role = Self.get(element, kAXRoleAttribute) as? String else {
+                    return fail("window role unavailable, pid=\(pid)")
+                }
+                if role == kAXScrollAreaRole || role == kAXHelpTagRole { continue } // 桌面/提示气泡不是工作窗口。
+                guard role == kAXWindowRole else { return fail("unexpected AXWindows role=\(role), pid=\(pid)") }
+                guard let subrole = Self.get(element, kAXSubroleAttribute) as? String else {
+                    return fail("window subrole unavailable, pid=\(pid)")
+                }
+                // 实测 AppKit 最小化后可报告 AXDialog；仍保存身份/状态，但绝不搬动。
+                if subrole != kAXStandardWindowSubrole {
+                    let minimized = Self.get(element, kAXMinimizedAttribute) as? Bool
+                    let fullscreen = Self.get(element, "AXFullScreen") as? Bool
+                    guard minimized == true || fullscreen == true else { continue }
+                }
+                var id: CGWindowID = 0
+                guard number?(element, &id) == .success,
+                      let row = appRows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }) else { return fail("AX/CG identity mismatch, pid=\(pid)") }
+                let key = WindowKey(pid: pid, id: id, launchTime: launch, bootSession: WindowIdentity.bootSession)
+                if let existing = handles[key] {
+                    guard CFEqual(existing.element, element) else { return fail("duplicate window identity, id=\(id)") }
+                    continue
+                }
+                handles[key] = Handle(element: element)
+                guard case .window(let state) = read(key), state.frame.width > 0, state.frame.height > 0 else { return fail("window geometry/state unavailable, id=\(id)") }
+                // 未知桌面归属不能生成一个声称可以精确恢复的普通窗口基线。
+                guard state.minimized || state.fullScreen || state.desktop != nil else { return fail("ordinary window desktop ambiguous, id=\(id)") }
+                saved.append(WorkspaceWindow(id: key, state: state,
+                    visible: (row[kCGWindowIsOnscreen as String] as? Bool) == true && !app.isHidden))
+            }
+        }
+        return saved
+    }
+
+    func read(_ id: WindowKey) -> WorkspaceWindowRead { read(id, mayRefresh: true) }
+
+    private func read(_ id: WindowKey, mayRefresh: Bool) -> WorkspaceWindowRead {
+        guard id.launchTime != nil, id.bootSession != nil else { return .unavailable("strong window identity unavailable") }
+        switch WindowIdentity.status(id) {
+        case .changed: return .closed
+        case .unavailable: return .unavailable("kernel process identity temporarily unavailable")
+        case .same: break
+        }
+        guard let rows = Self.rows() else { return .unavailable("CG window list unavailable") }
+        guard let row = rows.first(where: {
+            ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id.id &&
+            ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == id.pid
+        }) else { return .closed }
+        guard !WindowIdentity.screenLocked else { return .unavailable("Mac is locked") }
+        guard AXIsProcessTrusted() else { return .unavailable("Accessibility authorization unavailable") }
+        if handles[id] == nil { _ = refreshHandle(id, reason: "restore baseline handle") }
+        guard let h = handles[id] else { return .unavailable("AX window handle unavailable") }
+        var actual: CGWindowID = 0
+        let numberError = number?(h.element, &actual) ?? .notImplemented
+        guard numberError == .success, actual == id.id else {
+            let reason = "AX window identity unreadable, error=\(numberError.rawValue), actual=\(actual)"
+            if mayRefresh, refreshHandle(id, reason: reason) { return read(id, mayRefresh: false) }
+            return .unavailable(reason)
+        }
+        let keys = [kAXMinimizedAttribute, "AXFullScreen"]
+        var result: CFArray?
+        let stateError = AXUIElementCopyMultipleAttributeValues(h.element, keys as CFArray,
+            AXCopyMultipleAttributeOptions(rawValue: 0), &result)
+        guard stateError == .success, let values = result as? [Any], values.count == 2,
+              let minimized = values[0] as? Bool, let fullscreen = values[1] as? Bool else {
+            let attributes = (result as? [Any] ?? []).map(Self.attributeStatus)
+            let reason = "AX minimized/fullscreen metadata unreadable, error=\(stateError.rawValue), attributes=\(attributes)"
+            if mayRefresh, refreshHandle(id, reason: reason) { return read(id, mayRefresh: false) }
+            return .unavailable(reason)
+        }
+        guard let bounds = row[kCGWindowBounds as String] as? [String: Any],
+              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+              frame.minX.isFinite, frame.minY.isFinite, frame.width.isFinite, frame.height.isFinite else {
+            return .unavailable("CG window geometry unavailable")
+        }
+        return .window(WindowLook(frame: frame, fullScreen: fullscreen, minimized: minimized, desktop: desktop(id.id)))
+    }
+
+    /// 旧 AX 引用不可读时，只重取同一启动实例、同一 CGWindowID 的引用；不重新采纳几何或按标题匹配。
+    private func refreshHandle(_ id: WindowKey, reason: String) -> Bool {
+        guard WindowIdentity.matches(id), let element = AX.element(for: id) else { return false }
+        AXUIElementSetMessagingTimeout(element, 0.2)
+        var actual: CGWindowID = 0
+        guard number?(element, &actual) == .success, actual == id.id else { return false }
+        handles[id] = Handle(element: element)
+        if reportedRefresh.insert(id).inserted { diagnostics("窗口 #\(id.id) 按原身份重取引用：\(reason)") }
+        return true
+    }
+
+    func move(_ id: WindowKey, to point: CGPoint) -> Bool {
+        var point = point
+        guard let value = AXValueCreate(.cgPoint, &point) else { return false }
+        return set(id, kAXPositionAttribute, value)
+    }
+
+    func resize(_ id: WindowKey, to size: CGSize) -> Bool {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return false }
+        return set(id, kAXSizeAttribute, value)
+    }
+
+    private func set(_ id: WindowKey, _ name: String, _ value: AXValue) -> Bool {
+        // 写前再次核对原实例及特殊状态，不激活/raise，不修改最小化或全屏标志。
+        guard !WindowIdentity.screenLocked else { return false }
+        guard case .window(let now) = read(id), !now.minimized, !now.fullScreen,
+              let h = handles[id] else { return false }
+        return !WindowIdentity.screenLocked && AXUIElementSetAttributeValue(h.element, name as CFString, value) == .success
+    }
+
+    private func desktop(_ id: UInt32) -> WorkspaceDesktop? {
+        guard let connection, let displays, let spaces,
+              let membership = spaces(connection(), 7, [NSNumber(value: id)] as CFArray)?.takeRetainedValue() as? [NSNumber],
+              membership.count == 1,
+              let topology = displays(connection())?.takeRetainedValue() as? [[String: Any]] else { return nil }
+        let sid = membership[0].uint64Value
+        for display in topology {
+            guard let key = display["Display Identifier"] as? String,
+                  let list = display["Spaces"] as? [[String: Any]] else { continue }
+            let normal = list.filter { ($0["type"] as? NSNumber)?.intValue == 0 }
+            if let space = normal.first(where: { Self.spaceID($0) == sid }) {
+                return WorkspaceDesktop(display: key, space: sid, uuid: space["uuid"] as? String, soleUserSpace: normal.count == 1)
+            }
+        }
+        return nil
+    }
+
+    func desktopAvailable(_ desktop: WorkspaceDesktop) -> Bool {
+        guard let connection, let displays,
+              let topology = displays(connection())?.takeRetainedValue() as? [[String: Any]] else { return false }
+        return topology.contains { ($0["Display Identifier"] as? String) == desktop.display }
+    }
+
+    private static func attributeStatus(_ value: Any) -> String {
+        guard CFGetTypeID(value as CFTypeRef) == AXValueGetTypeID() else { return String(describing: type(of: value)) }
+        let ax = value as! AXValue
+        guard AXValueGetType(ax) == .axError else { return "unexpected AXValue" }
+        var error = AXError.success
+        guard AXValueGetValue(ax, .axError, &error) else { return "unknown AX attribute error" }
+        return "AXError=\(error.rawValue)"
+    }
+
+    private static func spaceID(_ value: [String: Any]) -> UInt64? {
+        (value["ManagedSpaceID"] as? NSNumber ?? value["id64"] as? NSNumber)?.uint64Value
+    }
+
+    private static func get(_ element: AXUIElement, _ name: String) -> AnyObject? {
+        var value: AnyObject?
+        return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+    }
+
+    private static func rows() -> [[String: Any]]? {
+        (CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]])?.filter {
+            ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0
+        }
+    }
+}

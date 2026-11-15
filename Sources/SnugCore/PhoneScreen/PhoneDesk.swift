@@ -4,7 +4,7 @@
 // 退出 App、关窗口例外：请求发出之后不占着队等结果（Electron 类 App 退出要五六秒，「要存储吗」要等人回答），
 // 另起一个盯着，期间别的动作照做；盯到对话框时再排进队把它放上手机屏。
 // 屏幕适配（ScreenFit）：手机屏的宽度跟着屏上显示的东西走，露着列表是基准宽度，放着窗口是那个窗口要的一档。
-// 隔离：只动手机屏和放上来的那一个窗口；加屏、撤屏被系统挪动的其它窗口放回原处；
+// 工作区：进入手机屏才收拢当前桌面普通窗口；切换保留，撤屏统一核验原位。特殊状态不自动改变；
 // 每一处改动先记账再动手，还原成功、或窗口确实没了才销账。没销的账（Snug 崩溃、App 卡住没放成）
 // 在下次启动（recover()）、或下次放窗口之前按账还原，不会被新的记录盖掉
 import CoreGraphics
@@ -22,6 +22,8 @@ public final class PhoneDesk {
         }
 
         public var screen = Screen.off
+        public var profile: PhoneScreenSize?
+        public var workspaceActive = false
         /// 手机屏上的窗口
         public var placed: Placed?
         /// 手机屏上露着 App 资源库。没放窗口时总是露着
@@ -49,6 +51,8 @@ public final class PhoneDesk {
         /// 窗口还在，但读不到、挪不动、关不掉（App 没响应，或没有辅助功能权限）；或者请它退出、强制退出的请求没送到
         case windowUnresponsive(app: String)
         /// 还原记录写不进去，不敢动窗口
+        case workspacePending
+        case workspaceCaptureUnavailable
         case recordUnwritable
         /// 手机屏还没好（屏幕组合还在变）
         case screenNotReady
@@ -72,11 +76,13 @@ public final class PhoneDesk {
         public let window: WindowInfo
         /// 比原来放大了几级
         public var zoom: Int
+        public var inWorkspace: Bool
         public var zoomable: Bool { ZoomBook.isZoomable(window.bundleID) }
 
-        public init(window: WindowInfo, zoom: Int) {
+        public init(window: WindowInfo, zoom: Int, inWorkspace: Bool = false) {
             self.window = window
             self.zoom = zoom
+            self.inWorkspace = inWorkspace
         }
     }
 
@@ -127,6 +133,10 @@ public final class PhoneDesk {
     private let windows: any WindowControl
     private let apps: any AppControl
     private let timeline: any Timeline
+    private let workspace: PhoneWorkspace
+    private var enteringWorkspace = false
+    private var recoveringWorkspace = false
+    private var workspaceEntered = false
     private let ledger: RestoreRecord<PhoneRecord>
     private let zoomFile: JSONFile<ZoomBook>
     private var zoomBook: ZoomBook
@@ -135,7 +145,7 @@ public final class PhoneDesk {
     private var wanted = false
     private var display: (id: DisplayID, bornAt: TimeInterval)?
     private var placement: Placement? {
-        didSet { state.placed = placement.map { Placed(window: $0.window, zoom: $0.record.zoom) } }
+        didSet { state.placed = placement.map { Placed(window: $0.window, zoom: $0.record.zoom, inWorkspace: workspace.contains($0.window.key)) } }
     }
     private var recheckGeneration = 0
     private var pendingRecheck: Task<Void, Never>?
@@ -156,6 +166,7 @@ public final class PhoneDesk {
         self.apps = apps
         self.timeline = timeline
         self.defaultZoom = defaultZoom
+        workspace = PhoneWorkspace(paths: paths, windows: windows)
         ledger = RestoreRecord(url: paths.phoneRecord)
         zoomFile = JSONFile(url: paths.zoomBook)
         zoomBook = zoomFile.loadOrQuarantine() ?? ZoomBook()
@@ -169,6 +180,29 @@ public final class PhoneDesk {
         wanted = on
         if !on { cancelRetry() }
         lane.run { await self.reconcile() }
+    }
+
+    /// 真正进入手机屏（推流指向它，或用户点其中的卡片）才收拢；离开列表不提前归还物理原位。
+    public func enterWorkspace() {
+        guard display != nil, !enteringWorkspace, !workspaceEntered else { return }
+        enteringWorkspace = true
+        lane.run {
+            defer { self.enteringWorkspace = false }
+            guard let id = self.display?.id, let area = self.displays.windowArea(id) else { return }
+            let outcome = await self.workspace.collect(in: area)
+            self.state.workspaceActive = self.workspace.active
+            switch outcome {
+            case .complete(let verified, let skipped):
+                self.workspaceEntered = true
+                Log.info("工作区已收拢并读回：\(verified) 个，特殊/其它桌面跳过 \(skipped) 个")
+            case .deferred:
+                self.state.notice = self.workspace.captureUnavailable ? .workspaceCaptureUnavailable : .workspacePending
+            case .failed(let ids):
+                // 部分失败也已经接管，原位仍由会话记录保存；不重复写入收拢预算。
+                self.workspaceEntered = true; self.state.notice = .workspacePending
+                Log.warn("部分工作窗口未收拢，原位记录保留：\(ids)")
+            }
+        }
     }
 
     /// 把这个窗口放上手机屏（原来那个先放回原位）。正在退出的 App 的窗口不放：它退完会记住手机屏上那个窄位置
@@ -217,6 +251,11 @@ public final class PhoneDesk {
                 }
                 await self.matchWidth()
             }
+            guard await self.workspace.restoreBeforeClosing(pid: app.pid) else {
+                self.state.quitting.remove(app.pid)
+                self.state.notice = .workspacePending
+                return
+            }
             Log.info("请 \(app.app.name) 退出")
             guard await self.apps.quit(pid: app.pid) else {
                 self.state.quitting.remove(app.pid)
@@ -254,6 +293,11 @@ public final class PhoneDesk {
                     return
                 }
                 await self.matchWidth()
+            }
+            guard await self.workspace.restoreBeforeClosing(pid: window.key.pid, window: window.key) else {
+                self.state.closing.remove(window.key)
+                self.state.notice = .workspacePending
+                return
             }
             if await self.windows.look(window.key)?.fullScreen == true { await self.windows.setFullScreen(window.key, false) }
             guard await self.windows.close(window.key) else {
@@ -342,6 +386,13 @@ public final class PhoneDesk {
     /// 窗口还在却不在屏上（被最小化、App 被隐藏、关成了隐藏），手机屏上只剩空桌面：也回到列表，
     /// 但它照旧算放着、还原记录留着，可以返回它、还原或换一个
     public func verifyPlacement() {
+        if display == nil, workspace.pending, !workspace.blocked, !recoveringWorkspace {
+            recoveringWorkspace = true
+            lane.run {
+                defer { self.recoveringWorkspace = false }
+                _ = await self.recoverWorkspace()
+            }
+        }
         guard placement != nil, state.work == nil, !verifying else { return }
         verifying = true
         lane.run {
@@ -365,7 +416,29 @@ public final class PhoneDesk {
 
     /// 有辅助功能权限后调用：上次 Snug 没来得及放回去的窗口，按记录放回去。记录在队里轮到时才读，不会拿旧的放两遍
     public func recover() {
-        lane.run { await self.putBackLeftover() }
+        lane.run {
+            if self.workspace.pending { _ = await self.recoverWorkspace() }
+            else { await self.putBackLeftover() }
+        }
+    }
+
+    private func recoverWorkspace() async -> Bool {
+        guard !workspace.blocked, !(await windows.isLocked()) else { state.notice = .workspacePending; return false }
+        if let stuck = await putBackLeftover() {
+            state.notice = .windowUnresponsive(app: stuck.app)
+            return false
+        }
+        switch await workspace.restore() {
+        case .complete(let verified, let skipped):
+            state.notice = nil
+            Log.info("工作区原位读回完成：\(verified) 个，已关闭/特殊状态跳过 \(skipped) 个")
+            return true
+        case .deferred: state.notice = .workspacePending; return false
+        case .failed(let ids):
+            state.notice = .workspacePending
+            Log.warn("工作区归位未完成，保留记录并停止覆盖：\(ids)")
+            return false
+        }
     }
 
     /// 退出前：放回窗口、撤掉手机屏，做完才返回
@@ -391,6 +464,11 @@ public final class PhoneDesk {
 
     private func reconcile() async {
         if wanted, display == nil {
+            if workspace.pending, await !recoverWorkspace() { return }
+            if let stuck = await putBackLeftover() {
+                if state.notice != .workspacePending { state.notice = .windowUnresponsive(app: stuck.app) }
+                return
+            }
             await addScreen()
         } else if !wanted, state.screen != .off {
             await removeScreen()
@@ -400,6 +478,7 @@ public final class PhoneDesk {
     private func addScreen() async {
         state.screen = .preparing
         let before = await windows.snapshot()
+        await workspace.captureBeforeScreen()
         onTopologyChange?()
         do {
             let id = try await displays.create()
@@ -407,8 +486,12 @@ public final class PhoneDesk {
             failures = 0
             await windows.restore(before, except: placement?.window.key)
             state.screen = .ready(id)
-            Log.info("手机屏 #\(id) 已就绪（\(displays.width(id).map { "\($0) 宽" } ?? "不是 2 倍")）")
+            state.profile = displays.profile(id)
+            if workspace.captureUnavailable { state.notice = .workspaceCaptureUnavailable }
+            Log.info("手机屏 #\(id) 已就绪（\(displays.width(id).map { "\($0) 宽" } ?? "模式待确认")）")
         } catch {
+            await windows.restore(before, except: placement?.window.key)
+            _ = await workspace.restore()
             state.screen = .failed
             Log.error("加手机屏失败：\(error)")
             scheduleRetry()
@@ -441,10 +524,14 @@ public final class PhoneDesk {
 
     private func removeScreen() async {
         // 屏要撤了，手机屏上不再算有窗口；放不回去的留着还原记录，下次放窗口或下次启动再放
-        if let p = placement { await putBack(p.record) }
+        if let p = placement, !(await windows.isLocked()) { await putBack(p.record) }
         placement = nil
         await retireDisplay()
+        workspace.screenRetired()
+        workspaceEntered = false
+        state.workspaceActive = false
         state.screen = .off
+        state.profile = nil
         state.listVisible = true
         // 这次远程的提示、没盯完的退出和关窗不带到下一次（App 照样在退，只是不再盯）
         state.notice = nil
@@ -452,6 +539,7 @@ public final class PhoneDesk {
         watches = [:]
         state.quitting = []
         state.closing = []
+        _ = await recoverWorkspace()
     }
 
     private func retireDisplay() async {
@@ -489,8 +577,10 @@ public final class PhoneDesk {
     // MARK: 屏幕适配
 
     /// 手机屏该用哪一档：露着列表（或没放窗口）是基准宽度，放着窗口是它那一档
+    private var activeProfile: PhoneScreenSize { state.profile ?? .redmi }
+
     private var wantedWidth: Int {
-        guard let p = placement, !state.listVisible else { return ScreenFit.baseWidth }
+        guard let p = placement, !state.listVisible else { return activeProfile.width }
         return p.width
     }
 
@@ -501,7 +591,12 @@ public final class PhoneDesk {
     }
 
     private func switchWidth(_ id: DisplayID, to width: Int) async {
-        if displays.width(id) != width { await displays.setWidth(id, width) }
+        if displays.width(id) != width {
+            await displays.setWidth(id, width)
+            if workspace.active, let area = displays.windowArea(id) {
+                if case .failed = await workspace.collect(in: area) { state.notice = .workspacePending }
+            }
+        }
     }
 
     /// 手机屏换到窗口那一档，把窗口铺满。铺不满（App 限定了最小尺寸）就按它实际的大小换到装得下的一档再铺。
@@ -514,7 +609,7 @@ public final class PhoneDesk {
         // 窗口落到了区域原点、只是尺寸被夹住，才是 App 限定了最小尺寸；没挪过去（App 不认挪动）就不按它的大小换档
         let placed = abs(got.minX - area.minX) < 2 && abs(got.minY - area.minY) < 2
         guard placed, let current = displays.width(id) else { return got }
-        let width = ScreenFit.width(toFit: got.size, in: area.size, at: current)
+        let width = ScreenFit.width(toFit: got.size, in: area.size, at: current, for: activeProfile)
         guard width > current, width != p.width else { return got }
         Log.info("\(p.window.label) 在 \(current) 宽的手机屏上铺不满（App 限定了最小尺寸，实际 \(got.short)），换到 \(width) 宽")
         p.width = width
@@ -538,7 +633,10 @@ public final class PhoneDesk {
     private func place(_ window: WindowInfo, zoom: Bool = true) async {
         let started = timeline.now
         guard let id = readyDisplay(for: "放 \(window.label)") else {
-            state.notice = .screenNotReady
+            if workspace.pending { state.notice = .workspacePending }
+            else if let record = ledger.pending() {
+                state.notice = record.window.launchTime == nil ? .workspacePending : .windowUnresponsive(app: record.app)
+            } else { state.notice = .screenNotReady }
             return
         }
         if placement?.window.key == window.key {
@@ -562,8 +660,9 @@ public final class PhoneDesk {
         guard let look = await reach(window) else { return }
         // 先记账再动手。全屏的窗口这时读到的是全屏的位置，崩溃后按它放回再恢复全屏也对
         var next = Placement(window: window, record: PhoneRecord(
-            window: window.key, app: window.app, label: window.label, original: originalFrame(look.frame, offPhone: id),
-            wasFullScreen: look.fullScreen, wasMinimized: look.minimized))
+            window: window.key, app: window.app, label: window.label,
+            original: workspace.contains(window.key) ? (workspace.original(window.key) ?? look.frame) : originalFrame(look.frame, offPhone: id),
+            wasFullScreen: look.fullScreen, wasMinimized: look.minimized), width: activeProfile.width)
         guard write(next.record) else {
             state.notice = .recordUnwritable
             return
@@ -594,7 +693,7 @@ public final class PhoneDesk {
         state.listVisible = false
         let was = look.fullScreen ? "（原来全屏）" : look.minimized ? "（原来最小化）" : ""
         let took = String(format: "%.1f", timeline.now - started)
-        let fill = Self.describeFill(got, in: displays.windowArea(id), width: displays.width(id) ?? next.width)
+        let fill = Self.describeFill(got, in: displays.windowArea(id), width: displays.width(id) ?? next.width, profile: activeProfile)
         Log.info("\(window.label) 放上手机屏（\(took)s）：原位 \(next.record.original.short)\(was)，\(fill)")
 
         let steps = zoomBook.steps(for: window.bundleID, default: defaultZoom)
@@ -813,6 +912,16 @@ public final class PhoneDesk {
             record.zoom = 0
             write(record)
         }
+        if workspace.contains(record.window), let id = display?.id, let area = displays.windowArea(id) {
+            guard let look = await windows.look(record.window) else { return await stuckOrGone(record, "窗口信息暂不可读") }
+            if !look.minimized && !look.fullScreen {
+                let target = CGRect(origin: area.origin, size: CGSize(width: min(record.original.width, area.width), height: min(record.original.height, area.height)))
+                guard let got = await windows.move(record.window, to: target),
+                      abs(got.minX - area.minX) <= 1, abs(got.minY - area.minY) <= 1, got.intersects(area) else { return record }
+            }
+            settleRecord()
+            return nil
+        }
         guard let got = await windows.move(record.window, to: record.original) else {
             return await stuckOrGone(record, "挪不动")
         }
@@ -822,13 +931,13 @@ public final class PhoneDesk {
         } else if restoringState, record.wasMinimized {
             await windows.setMinimized(record.window, true)
         }
-        settleRecord()
-        if got.matches(record.original) {
-            let restored = !restoringState ? "" : record.wasFullScreen ? "并恢复全屏" : record.wasMinimized ? "并最小化" : ""
-            Log.info("\(record.label) 已放回原位\(restored)\(zoom != 0 ? "，字号缩回 \(zoom) 级" : "")")
-        } else {
-            Log.warn("\(record.label) 放回没对上：目标 \(record.original.short)，实际 \(got.short)")
+        guard got.matches(record.original) else {
+            Log.warn("窗口原位尚未匹配，保留记录：\(record.window)")
+            return record
         }
+        settleRecord()
+        let restored = !restoringState ? "" : record.wasFullScreen ? "并恢复全屏" : record.wasMinimized ? "并最小化" : ""
+        Log.info("\(record.label) 已放回原位\(restored)\(zoom != 0 ? "，字号缩回 \(zoom) 级" : "")")
         return nil
     }
 
@@ -837,6 +946,11 @@ public final class PhoneDesk {
     @discardableResult
     private func putBackLeftover() async -> PhoneRecord? {
         guard placement == nil, let record = ledger.pending() else { return nil }
+        guard record.window.launchTime != nil, record.window.bootSession != nil else {
+            state.notice = .workspacePending
+            Log.warn("旧单窗记录缺少启动身份，保留记录，未重放未知布局")
+            return record
+        }
         guard await windows.exists(record.window) else {
             Log.info("还原记录里的 \(record.label) 已经不在了（App 退出或窗口关了），记录作废")
             settleRecord()
@@ -905,8 +1019,8 @@ public final class PhoneDesk {
     }
 
     /// 铺满了没有、用的哪一档。没铺满是 App 要的比最宽一档还宽，或者换档没成（见前面的日志）
-    private static func describeFill(_ got: CGRect, in area: CGRect?, width: Int) -> String {
-        let screen = width == ScreenFit.baseWidth ? "" : "（手机屏 \(width) 宽）"
+    private static func describeFill(_ got: CGRect, in area: CGRect?, width: Int, profile: PhoneScreenSize) -> String {
+        let screen = width == profile.width ? "" : "（手机屏 \(width) 宽）"
         if let area, got.matches(area) { return "已铺满\(screen)" }
         return "没铺满\(screen)，实际 \(got.short)"
     }
@@ -964,7 +1078,7 @@ private struct Placement {
     let window: WindowInfo
     var record: PhoneRecord
     /// 手机屏用哪一档（ScreenFit）：先按基准宽度，铺不满时换成装得下它的一档
-    var width = ScreenFit.baseWidth
+    var width: Int
     /// 上次挪完的样子：比最宽一档还宽的窗口铺不满，以它为准判断窗口有没有被再挪动
     var settled: CGRect?
 }

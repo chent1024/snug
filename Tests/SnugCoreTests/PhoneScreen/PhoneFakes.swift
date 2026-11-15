@@ -39,8 +39,8 @@ final class FakeDisplays: PhoneDisplays {
 
     /// 这一档的可放区域，和真的一样：整屏扣掉菜单栏和（跟着缩放的）底部小横条
     nonisolated static func area(width: Int) -> CGRect {
-        let size = ScreenFit.size(width: width)
-        let bar = ScreenFit.homeBarHeight(screenWidth: size.width)
+        let size = ScreenFit.size(width: width, for: .redmi)
+        let bar = ScreenFit.homeBarHeight(screenWidth: size.width, for: .redmi)
         return CGRect(x: origin.x, y: origin.y + menuBar, width: size.width, height: size.height - menuBar - bar)
     }
 
@@ -52,7 +52,7 @@ final class FakeDisplays: PhoneDisplays {
         }
         nextID += 1
         createdAt[nextID] = clock?()
-        widths[nextID] = ScreenFit.baseWidth
+        widths[nextID] = PhoneScreenSize.redmi.width
         onCreate?()
         return nextID
     }
@@ -65,6 +65,7 @@ final class FakeDisplays: PhoneDisplays {
     }
 
     func width(_ id: DisplayID) -> Int? { widths[id] }
+    func profile(_ id: DisplayID) -> PhoneScreenSize? { widths[id] == nil ? nil : .redmi }
 
     func setWidth(_ id: DisplayID, _ width: Int) async {
         journal.add("width \(id) \(width)")
@@ -72,7 +73,7 @@ final class FakeDisplays: PhoneDisplays {
     }
 
     func bounds(_ id: DisplayID) -> CGRect? {
-        widths[id].map { CGRect(origin: Self.origin, size: ScreenFit.size(width: $0)) }
+        widths[id].map { CGRect(origin: Self.origin, size: ScreenFit.size(width: $0, for: .redmi)) }
     }
 
     func windowArea(_ id: DisplayID) -> CGRect? {
@@ -86,7 +87,7 @@ final class FakeDisplays: PhoneDisplays {
 }
 
 /// 假窗口：记住每个窗口的位置、是否全屏、是否最小化、字号级数
-final class FakeWindows: WindowControl {
+final class FakeWindows: WindowControl, WorkspaceWindowAccess {
     struct Window: Sendable {
         var frame: CGRect
         var fullScreen = false
@@ -96,6 +97,7 @@ final class FakeWindows: WindowControl {
         /// App 把窗口藏起来了（被隐藏、关成了隐藏）：还在，但不在屏上
         var hidden = false
         var zoom = 0
+        var desktop = WorkspaceDesktop(display: "physical", space: 1, uuid: "physical-space", soleUserSpace: true)
         /// 到这个时刻才出现在屏上（App 刚启动、窗口还没画出来）
         var shownFrom: TimeInterval = 0
         /// 列表、捕获新窗口时报出来的样子
@@ -103,6 +105,9 @@ final class FakeWindows: WindowControl {
     }
 
     let journal: Journal
+    let screenLocked = Locked(false)
+    let failWorkspaceRestore = Locked(false)
+    let hideWorkspaceMetadata = Locked(false)
     private let state = Locked<[WindowKey: Window]>([:])
     private let blocked = Locked(false)
     private let movesBlocked = Locked(false)
@@ -117,6 +122,62 @@ final class FakeWindows: WindowControl {
     let clock = Locked<(@Sendable () -> TimeInterval)?>(nil)
     /// 设了就在每次挪窗口、发按键时记一下此刻还原记录在不在（检查「先记账再动手」）
     let ledger: URL?
+
+    func isLocked() async -> Bool { screenLocked.withLock { $0 } }
+
+    func captureWorkspace() async -> WorkspaceSnapshot? {
+        guard let windows = capture() else { return nil }
+        return WorkspaceSnapshot(windows: windows)
+    }
+    func capture() -> [WorkspaceWindow]? {
+        guard !screenLocked.withLock({ $0 }), !blocked.withLock({ $0 }) else { return nil }
+        return state.withLock { values in
+            values.map { key, w in
+                WorkspaceWindow(id: key, state: WindowLook(frame: w.frame, fullScreen: w.fullScreen, minimized: w.minimized, desktop: w.desktop), visible: !w.hidden && !w.minimized)
+            }.sorted { $0.id.id < $1.id.id }
+        }
+    }
+    func applyWorkspace(_ snapshot: WorkspaceSnapshot, goal: WorkspaceLayout.Goal) async -> WorkspaceOutcome {
+        if screenLocked.withLock({ $0 }) { return .deferred }
+        journal.add(goal == .restore ? "workspace restore" : "workspace collect")
+        if goal == .restore, failWorkspaceRestore.withLock({ $0 }) { return .failed(snapshot.windows.map { $0.id.id }) }
+        let engine = WorkspaceLayout(access: self, windows: snapshot.windows)
+        for tick in 0..<80 {
+            switch engine.advance(goal, now: Double(tick) * 0.35) {
+            case .complete(let n, let skipped): return .complete(verified: n, skipped: skipped)
+            case .failed(let ids): return .failed(ids)
+            case .pending, .waitingForMetadata: break
+            }
+        }
+        return .failed(snapshot.windows.map { $0.id.id })
+    }
+    func read(_ key: WindowKey) -> WorkspaceWindowRead {
+        guard self.window(key) != nil else { return .closed }
+        if blocked.withLock({ $0 }) || hideWorkspaceMetadata.withLock({ $0 }) { return .unavailable("fake unavailable") }
+        return state.withLock { values in
+            guard let w = values[key] else { return .closed }
+            return .window(WindowLook(frame: w.frame, fullScreen: w.fullScreen, minimized: w.minimized, desktop: w.desktop))
+        }
+    }
+    func move(_ key: WindowKey, to point: CGPoint) -> Bool {
+        guard !screenLocked.withLock({ $0 }), !blocked.withLock({ $0 }) else { return false }
+        state.withLock { values in
+            guard var w = values[key], !w.minimized, !w.fullScreen else { return }
+            w.frame.origin = point
+            w.desktop = WorkspaceDesktop(display: point.x >= 2000 ? "virtual" : "physical", space: point.x >= 2000 ? 2 : 1, uuid: point.x >= 2000 ? "virtual-space" : "physical-space", soleUserSpace: true)
+            values[key] = w
+        }
+        return true
+    }
+    func resize(_ key: WindowKey, to size: CGSize) -> Bool {
+        guard !screenLocked.withLock({ $0 }), !blocked.withLock({ $0 }) else { return false }
+        state.withLock { values in
+            guard var w = values[key], !w.minimized, !w.fullScreen else { return }
+            w.frame.size = size; values[key] = w
+        }
+        return true
+    }
+    func desktopAvailable(_ desktop: WorkspaceDesktop) -> Bool { true }
 
     init(journal: Journal, ledger: URL? = nil) {
         self.journal = journal
@@ -281,11 +342,13 @@ final class FakeWindows: WindowControl {
     }
 
     func snapshot() async -> [WindowKey: CGRect] {
+        guard !screenLocked.withLock({ $0 }) else { return [:] }
         journal.add("snapshot")
         return state.withLock { $0.mapValues(\.frame) }
     }
 
     func restore(_ snapshot: [WindowKey: CGRect], except: WindowKey?) async {
+        guard !screenLocked.withLock({ $0 }) else { return }
         journal.add("restore" + (except.map { " except \($0.id)" } ?? ""))
         for (key, frame) in snapshot where key != except && self.window(key)?.frame != frame {
             setFrame(key, frame)
@@ -363,7 +426,7 @@ final class FakeApps: AppControl {
 
     private func spawn(for app: AppInfo, pid: Int32) {
         guard let s = spawns.withLock({ $0[app.bundleID] }) else { return }
-        let key = WindowKey(pid: pid, id: s.id)
+        let key = testWindowKey(pid: pid, id: s.id)
         windows.add(key, frame: s.frame, fullScreen: s.fullScreen, windowed: s.windowed, shownFrom: timeline.now + s.delay,
                     info: WindowInfo(key: key, app: app.name, bundleID: app.bundleID, title: s.title))
     }
@@ -374,7 +437,7 @@ final class FakeApps: AppControl {
         journal.add("open \(app.bundleID)")
         guard !launchFails.withLock({ $0 }) else { return nil }
         if let pid = await pid(of: app) {
-            if let id = reshows.withLock({ $0[app.bundleID] }) { windows.unhide(WindowKey(pid: pid, id: id)) } else { spawn(for: app, pid: pid) }
+            if let id = reshows.withLock({ $0[app.bundleID] }) { windows.unhide(testWindowKey(pid: pid, id: id)) } else { spawn(for: app, pid: pid) }
             return pid
         }
         let pid = nextPID.withLock { $0 += 1; return $0 }
@@ -401,7 +464,7 @@ final class FakeApps: AppControl {
         case .exits: exit(pid)
         case .slow(let after): exitsAt.withLock { $0[pid] = timeline.now + after }
         case .asks(let id, let dialog, let answer):
-            let key = WindowKey(pid: pid, id: id)
+            let key = testWindowKey(pid: pid, id: id)
             if dialog {
                 windows.add(key, frame: CGRect(x: 546, y: 380, width: 420, height: 160),
                             info: WindowInfo(key: key, app: app.name, bundleID: app.bundleID, title: ""))

@@ -81,9 +81,9 @@ public struct TouchTranslator: Sendable {
     public var isCoasting: Bool { momentum != nil }
 
     /// phoneScreen：手机屏的范围（全局坐标，没有手机屏时为 nil）。只看按下那一下落没落在里面
-    public mutating func handle(_ input: TouchInput, phoneScreen: CGRect?) -> TouchResponse {
+    public mutating func handle(_ input: TouchInput, phoneScreen: CGRect?, profile: PhoneScreenSize = .redmi) -> TouchResponse {
         switch input.kind {
-        case .press: press(input, on: phoneScreen)
+        case .press: press(input, on: phoneScreen, profile: profile)
         case .drag: drag(input)
         case .release: release(input)
         }
@@ -100,14 +100,14 @@ public struct TouchTranslator: Sendable {
         return wheel.step(dx: frame.dx, dy: frame.dy, phase: .none, momentum: frame.phase, at: origin)
     }
 
-    private mutating func press(_ input: TouchInput, on phoneScreen: CGRect?) -> TouchResponse {
+    private mutating func press(_ input: TouchInput, on phoneScreen: CGRect?, profile: PhoneScreenSize) -> TouchResponse {
         // 新的一按先把还在走的惯性停掉（和 iPhone 上手指按住正在滚的列表一样）
         let stop = stopMomentum()
         guard let phoneScreen, phoneScreen.contains(input.location) else {
             phase = .idle
             return TouchResponse(passOriginal: true, commands: stop)
         }
-        scale = ScreenFit.scale(screenWidth: phoneScreen.width)
+        scale = ScreenFit.scale(screenWidth: phoneScreen.width, for: profile)
         pressStoppedCoast = !stop.isEmpty
         phase = .pending(since: input.time)
         origin = input.location

@@ -397,10 +397,21 @@ release_tool() { swift run -c release --quiet snug-release "$@"; }
 # MARK: 命令
 
 cmd_check() {
+  # CLT 的默认后端漏载 Testing 宏，而且可能只构建不执行测试；使用实际可运行测试的原生后端。
+  local developer; developer="$(xcode-select -p)"
+  local flags=()
+  if [[ $developer == */CommandLineTools ]]; then
+    local frameworks="$developer/Library/Developer/Frameworks"
+    local plugin="$developer/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
+    [[ -f $plugin ]] || die "当前 Command Line Tools 缺少 Swift Testing 宏插件"
+    flags=(--build-system native -Xswiftc -F -Xswiftc "$frameworks"
+           -Xswiftc -load-plugin-library -Xswiftc "$plugin"
+           -Xlinker -F -Xlinker "$frameworks" -Xlinker -rpath -Xlinker "$frameworks")
+  fi
   step "swift build（全部产物）"
-  swift build
+  swift build "${flags[@]}"
   step "swift test"
-  swift test
+  swift test "${flags[@]}" --enable-swift-testing
   print -- "✅ check 通过"
 }
 

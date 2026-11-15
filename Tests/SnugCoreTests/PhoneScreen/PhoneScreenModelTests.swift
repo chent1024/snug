@@ -5,16 +5,30 @@ import Testing
 
 @Suite("手机屏的规格")
 struct PhoneScreenSpecTests {
-    @Test("物理尺寸按像素上限、220ppi 折算（不是手机的 460ppi）")
-    func millimeters() {
-        let mm = PhoneScreenSpec.millimeters
-        #expect(abs(mm.width - 2160.0 / 220 * 25.4) < 0.001)
-        #expect(abs(mm.height - 3800.0 / 220 * 25.4) < 0.001)
+    @Test("仅红米与iPhone13两项，沿用原伴侣画面像素")
+    func sizes() throws {
+        #expect(PhoneScreenSize.allCases == [.redmi, .iphone13])
+        #expect((PhoneScreenSize.redmi.width, PhoneScreenSize.redmi.height) == (488, 1084))
+        #expect((PhoneScreenSize.iphone13.width, PhoneScreenSize.iphone13.height) == (585, 1266))
+        #expect(try JSONDecoder().decode([PhoneScreenSize].self, from: JSONEncoder().encode(PhoneScreenSize.allCases)) == PhoneScreenSize.allCases)
     }
 
-    @Test("一个固定身份，外加两个备用，互不重复")
+    @Test("物理尺寸按所选设备的像素上限、220ppi折算", arguments: PhoneScreenSize.allCases)
+    func millimeters(profile: PhoneScreenSize) {
+        let mm = PhoneScreenSpec.millimeters(for: profile)
+        let maximum = ScreenFit.maxPixels(for: profile)
+        #expect(abs(mm.width - Double(maximum.width) / 220 * 25.4) < 0.001)
+        #expect(abs(mm.height - Double(maximum.height) / 220 * 25.4) < 0.001)
+    }
+
+    @Test("两设备独立固定身份各有两个备用，不复用旧模式表")
     func serials() {
-        #expect(PhoneScreenSpec.serials == [200_000_108, 200_000_118, 200_000_128])
+        let ids = PhoneScreenSize.allCases.flatMap { PhoneScreenSpec.serials(for: $0) }
+        #expect(ids.count == 6)
+        #expect(Set(ids).count == 6)
+        #expect(Set(ids).isDisjoint(with: [200_000_108, 200_000_118, 200_000_128,
+                                         200_100_008, 200_100_018, 200_100_028,
+                                         200_200_008, 200_200_018, 200_200_028]))
     }
 }
 

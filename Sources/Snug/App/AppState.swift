@@ -62,6 +62,7 @@ enum LoginItemIssue: Equatable {
 protocol AppIntents: AnyObject {
     func setPhoneScreen(_ on: Bool)
     func setGestures(_ on: Bool)
+    func setScreenSize(_ size: PhoneScreenSize)
     func setZoomSteps(_ steps: Int)
     func setLaunchAtLogin(_ on: Bool)
     /// 开机启动待允许：直接打开系统设置的「登录项」

@@ -14,6 +14,7 @@ final class AppController {
     let state = AppState()
     let updater: Updater
     let desk: PhoneDesk
+    let displays: PhoneDisplayService
     /// 手机屏 App 资源库的统一数据源。界面碰得到的系统入口只有 desk 和它
     let catalog: AppCatalog
     /// 用户从菜单或设置里点「退出」（由 AppDelegate 接到退出流程上）
@@ -38,7 +39,8 @@ final class AppController {
         let helper = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
         let windows = WindowService()
         let apps = AppService()
-        desk = PhoneDesk(displays: PhoneDisplayService(helper: helper), windows: windows, apps: apps, paths: paths,
+        displays = PhoneDisplayService(helper: helper, size: store.config.screenSize)
+        desk = PhoneDesk(displays: displays, windows: windows, apps: apps, paths: paths,
                          defaultZoom: store.config.zoomSteps)
         catalog = AppCatalog(apps: apps, windows: windows)
         state.config = store.config
@@ -104,6 +106,7 @@ final class AppController {
         state.update(\.controllers, session.controllers)
         // 在推哪块屏只能按一路推流推断：几台同时连着时各推各的、日志混在一起，当作不知道（手机屏上的列表照旧刷新）
         state.update(\.streamedDisplay, session.controllers.count > 1 ? nil : sample.streamingDisplay)
+        if state.phoneInUse { desk.enterWorkspace() }
     }
 
     /// 要不要手机屏：开着总开关、有权限，这次远程的控制端里有不是电脑的（见 RemoteSession.wantsPhoneScreen）
@@ -133,11 +136,11 @@ final class AppController {
         let region = state.phone.display.map(CGDisplayBounds)
         guard store.config.gestures, let region else {
             if touch.isRunning { touch.stop() }
-            touch.setRegion(nil)
+            touch.setRegion(nil, profile: state.config.screenSize)
             state.update(\.gesturesFailed, false)
             return
         }
-        touch.setRegion(region)
+        touch.setRegion(region, profile: state.phone.profile ?? state.config.screenSize)
         if !touch.isRunning { state.update(\.gesturesFailed, !touch.start()) }
     }
 
